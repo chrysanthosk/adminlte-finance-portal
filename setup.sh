@@ -1,6 +1,7 @@
 #!/bin/bash
 # setup.sh - Complete deployment script for AdminLTE Finance Portal
 # Supports: Ubuntu/Debian and RHEL/CentOS/Rocky/AlmaLinux
+# Version: 2.0
 
 set -e
 
@@ -47,6 +48,7 @@ detect_os() {
             INSTALL_CMD="apt install -y"
             UPDATE_CMD="apt update"
             PHP_VERSION="8.2"
+            WEB_USER="www-data"
             ;;
         rhel|centos|rocky|almalinux|fedora)
             PKG_MANAGER="yum"
@@ -56,6 +58,7 @@ detect_os() {
             INSTALL_CMD="$PKG_MANAGER install -y"
             UPDATE_CMD="$PKG_MANAGER update -y"
             PHP_VERSION="8.2"
+            WEB_USER="apache"
             ;;
         *)
             echo -e "${RED}Unsupported OS: $OS${NC}"
@@ -122,7 +125,7 @@ install_nodejs() {
     echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
 
     if command -v node &> /dev/null; then
-        echo -e "${GREEN}✓ Node.js is already installed$(NC}"
+        echo -e "${GREEN}✓ Node.js is already installed${NC}"
         node --version
     else
         echo -e "${YELLOW}Installing Node.js...${NC}"
@@ -229,7 +232,9 @@ PROJECT_DIR="/var/www/${PROJECT_NAME}"
 read -p "Install SSL certificate? (recommended for production) [Y/n]: " INSTALL_SSL
 INSTALL_SSL=${INSTALL_SSL:-Y}
 
-read -p "Your email for SSL certificate: " SSL_EMAIL
+if [[ $INSTALL_SSL =~ ^[Yy]$ ]]; then
+    read -p "Your email for SSL certificate: " SSL_EMAIL
+fi
 
 # Web Server Selection
 echo -e "\n${BLUE}═══════════════════════════════════════${NC}"
@@ -255,12 +260,15 @@ case $OS in
                          php${PHP_VERSION}-gd php${PHP_VERSION}-intl
             systemctl start php${PHP_VERSION}-fpm
             systemctl enable php${PHP_VERSION}-fpm
+            systemctl start nginx
+            systemctl enable nginx
         else
             # Apache + mod_php
             $INSTALL_CMD apache2 php${PHP_VERSION} libapache2-mod-php${PHP_VERSION} \
                          php${PHP_VERSION}-mysql php${PHP_VERSION}-mbstring php${PHP_VERSION}-xml \
                          php${PHP_VERSION}-curl php${PHP_VERSION}-zip php${PHP_VERSION}-gd php${PHP_VERSION}-intl
             a2enmod rewrite
+            a2enmod headers
             systemctl start apache2
             systemctl enable apache2
         fi
@@ -312,8 +320,8 @@ case $OS in
         # Configure SELinux
         if command -v semanage &> /dev/null; then
             echo -e "${YELLOW}Configuring SELinux...${NC}"
-            semanage fcontext -a -t httpd_sys_rw_content_t "${PROJECT_DIR}(/.*)?"
-            restorecon -R ${PROJECT_DIR} || true
+            semanage fcontext -a -t httpd_sys_rw_content_t "${PROJECT_DIR}(/.*)?" || true
+            restorecon -R ${PROJECT_DIR} 2>/dev/null || true
             setsebool -P httpd_can_network_connect_db 1
             setsebool -P httpd_can_network_connect 1
         fi
@@ -333,7 +341,13 @@ echo -e "${GREEN}✓ Web server and PHP installed${NC}"
 # Create project directory
 echo -e "\n${YELLOW}Creating project directories...${NC}"
 mkdir -p ${PROJECT_DIR}/{dist,api}
-chown -R $SUDO_USER:www-data ${PROJECT_DIR} 2>/dev/null || chown -R $SUDO_USER:apache ${PROJECT_DIR} 2>/dev/null
+
+# Set proper ownership
+if [ ! -z "$SUDO_USER" ]; then
+    chown -R $SUDO_USER:${WEB_USER} ${PROJECT_DIR}
+else
+    chown -R ${WEB_USER}:${WEB_USER} ${PROJECT_DIR}
+fi
 chmod -R 775 ${PROJECT_DIR}
 
 # Update environment.prod.ts with domain
@@ -403,7 +417,7 @@ password=${DB_PASS}
 DB_INI
 
 chmod 600 ${PROJECT_DIR}/api/db.ini
-chown www-data:www-data ${PROJECT_DIR}/api/db.ini 2>/dev/null || chown apache:apache ${PROJECT_DIR}/api/db.ini 2>/dev/null
+chown ${WEB_USER}:${WEB_USER} ${PROJECT_DIR}/api/db.ini
 
 echo -e "${GREEN}✓ Files copied${NC}"
 
@@ -414,26 +428,28 @@ echo -e "${BLUE}═════════════════════�
 
 if [ "$WEB_SERVER" == "1" ]; then
     # Nginx configuration
-    cat > /etc/nginx/sites-available/${PROJECT_NAME} <<NGINX_CONF
+    NGINX_CONF_FILE="/etc/nginx/sites-available/${PROJECT_NAME}"
+
+    cat > ${NGINX_CONF_FILE} <<'NGINX_CONF'
 server {
     listen 80;
-    server_name ${DOMAIN};
-    root ${PROJECT_DIR}/dist;
+    server_name DOMAIN_PLACEHOLDER;
+    root PROJECT_DIR_PLACEHOLDER/dist;
     index index.html;
 
     # Angular routes
     location / {
-        try_files \$uri \$uri/ /index.html;
+        try_files $uri $uri/ /index.html;
     }
 
     # PHP API
     location /api {
-        alias ${PROJECT_DIR}/api;
+        alias PROJECT_DIR_PLACEHOLDER/api;
 
         location ~ \.php$ {
             include snippets/fastcgi-php.conf;
-            fastcgi_pass unix:/var/run/php/php${PHP_VERSION}-fpm.sock;
-            fastcgi_param SCRIPT_FILENAME \$request_filename;
+            fastcgi_pass unix:/var/run/php/phpPHP_VERSION_PLACEHOLDER-fpm.sock;
+            fastcgi_param SCRIPT_FILENAME $request_filename;
         }
     }
 
@@ -448,23 +464,36 @@ server {
 }
 NGINX_CONF
 
-    ln -sf /etc/nginx/sites-available/${PROJECT_NAME} /etc/nginx/sites-enabled/ 2>/dev/null || {
+    # Replace placeholders
+    sed -i "s|DOMAIN_PLACEHOLDER|${DOMAIN}|g" ${NGINX_CONF_FILE}
+    sed -i "s|PROJECT_DIR_PLACEHOLDER|${PROJECT_DIR}|g" ${NGINX_CONF_FILE}
+    sed -i "s|PHP_VERSION_PLACEHOLDER|${PHP_VERSION}|g" ${NGINX_CONF_FILE}
+
+    # Enable site
+    if [ -d "/etc/nginx/sites-enabled" ]; then
+        ln -sf ${NGINX_CONF_FILE} /etc/nginx/sites-enabled/
+    else
         # For RHEL-based systems
-        cp /etc/nginx/sites-available/${PROJECT_NAME} /etc/nginx/conf.d/${PROJECT_NAME}.conf
-    }
+        cp ${NGINX_CONF_FILE} /etc/nginx/conf.d/${PROJECT_NAME}.conf
+    fi
 
     nginx -t && systemctl reload nginx
     echo -e "${GREEN}✓ Nginx configured${NC}"
 
 else
     # Apache configuration
-    cat > /etc/apache2/sites-available/${PROJECT_NAME}.conf 2>/dev/null || \
-    cat > /etc/httpd/conf.d/${PROJECT_NAME}.conf <<APACHE_CONF
-<VirtualHost *:80>
-    ServerName ${DOMAIN}
-    DocumentRoot ${PROJECT_DIR}/dist
+    if [ -d "/etc/apache2/sites-available" ]; then
+        APACHE_CONF_FILE="/etc/apache2/sites-available/${PROJECT_NAME}.conf"
+    else
+        APACHE_CONF_FILE="/etc/httpd/conf.d/${PROJECT_NAME}.conf"
+    fi
 
-    <Directory ${PROJECT_DIR}/dist>
+    cat > ${APACHE_CONF_FILE} <<'APACHE_CONF'
+<VirtualHost *:80>
+    ServerName DOMAIN_PLACEHOLDER
+    DocumentRoot PROJECT_DIR_PLACEHOLDER/dist
+
+    <Directory PROJECT_DIR_PLACEHOLDER/dist>
         Options -Indexes +FollowSymLinks
         AllowOverride All
         Require all granted
@@ -478,11 +507,15 @@ else
         RewriteRule . /index.html [L]
     </Directory>
 
-    Alias /api ${PROJECT_DIR}/api
-    <Directory ${PROJECT_DIR}/api>
+    Alias /api PROJECT_DIR_PLACEHOLDER/api
+    <Directory PROJECT_DIR_PLACEHOLDER/api>
         Options -Indexes
         AllowOverride All
         Require all granted
+
+        <FilesMatch \.php$>
+            SetHandler "proxy:unix:/var/run/php/phpPHP_VERSION_PLACEHOLDER-fpm.sock|fcgi://localhost"
+        </FilesMatch>
     </Directory>
 
     # Security headers
@@ -490,16 +523,25 @@ else
     Header always set X-Content-Type-Options "nosniff"
     Header always set X-XSS-Protection "1; mode=block"
 
-    ErrorLog \${APACHE_LOG_DIR}/${PROJECT_NAME}_error.log
-    CustomLog \${APACHE_LOG_DIR}/${PROJECT_NAME}_access.log combined
+    ErrorLog ${APACHE_LOG_DIR}/PROJECT_NAME_PLACEHOLDER_error.log
+    CustomLog ${APACHE_LOG_DIR}/PROJECT_NAME_PLACEHOLDER_access.log combined
 </VirtualHost>
 APACHE_CONF
 
+    # Replace placeholders
+    sed -i "s|DOMAIN_PLACEHOLDER|${DOMAIN}|g" ${APACHE_CONF_FILE}
+    sed -i "s|PROJECT_DIR_PLACEHOLDER|${PROJECT_DIR}|g" ${APACHE_CONF_FILE}
+    sed -i "s|PROJECT_NAME_PLACEHOLDER|${PROJECT_NAME}|g" ${APACHE_CONF_FILE}
+    sed -i "s|PHP_VERSION_PLACEHOLDER|${PHP_VERSION}|g" ${APACHE_CONF_FILE}
+
+    # Enable site
     if [ -d "/etc/apache2/sites-available" ]; then
         a2ensite ${PROJECT_NAME}
+        systemctl reload apache2
+    else
+        systemctl reload httpd
     fi
 
-    systemctl reload httpd 2>/dev/null || systemctl reload apache2
     echo -e "${GREEN}✓ Apache configured${NC}"
 fi
 
@@ -518,4 +560,87 @@ if [[ $INSTALL_SSL =~ ^[Yy]$ ]]; then
         }
     else
         certbot --apache -d ${DOMAIN} --non-interactive --agree-tos --email ${SSL_EMAIL} || {
-            echo -e "${YELLOW}! Automatic SSL installation failed. You can run it manually*_
+            echo -e "${YELLOW}! Automatic SSL installation failed. You can run it manually later:${NC}"
+            echo -e "${YELLOW}  sudo certbot --apache -d ${DOMAIN}${NC}"
+        }
+    fi
+
+    # Test automatic renewal
+    echo -e "${YELLOW}Testing SSL certificate auto-renewal...${NC}"
+    certbot renew --dry-run || echo -e "${YELLOW}! Auto-renewal test failed. Please check certbot configuration.${NC}"
+fi
+
+# Final Summary
+echo -e "\n${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${GREEN}║                                                           ║${NC}"
+echo -e "${GREEN}║           Installation Completed Successfully!           ║${NC}"
+echo -e "${GREEN}║                                                           ║${NC}"
+echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}\n"
+
+echo -e "${BLUE}═══════════════════════════════════════${NC}"
+echo -e "${BLUE}  Installation Summary${NC}"
+echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
+
+echo -e "${YELLOW}Domain:${NC} ${DOMAIN}"
+echo -e "${YELLOW}Project Directory:${NC} ${PROJECT_DIR}"
+echo -e "${YELLOW}Database Name:${NC} ${DB_NAME}"
+echo -e "${YELLOW}Database User:${NC} ${DB_USER}"
+if [ "$WEB_SERVER" == "1" ]; then
+    echo -e "${YELLOW}Web Server:${NC} Nginx"
+else
+    echo -e "${YELLOW}Web Server:${NC} Apache"
+fi
+
+if [[ $INSTALL_SSL =~ ^[Yy]$ ]]; then
+    echo -e "${YELLOW}SSL:${NC} Enabled (Let's Encrypt)"
+else
+    echo -e "${YELLOW}SSL:${NC} Not installed"
+fi
+
+echo -e "\n${BLUE}═══════════════════════════════════════${NC}"
+echo -e "${BLUE}  Default Login Credentials${NC}"
+echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
+
+echo -e "${YELLOW}Username:${NC} admin"
+echo -e "${YELLOW}Password:${NC} password"
+echo -e "${RED}⚠️  IMPORTANT: Change the default password immediately!${NC}\n"
+
+echo -e "${BLUE}═══════════════════════════════════════${NC}"
+echo -e "${BLUE}  Next Steps${NC}"
+echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
+
+echo -e "1. Visit your site: ${GREEN}https://${DOMAIN}${NC}"
+echo -e "2. Login with default credentials"
+echo -e "3. Go to Profile and change your password"
+echo -e "4. Enable 2FA for additional security"
+echo -e "5. Go to Settings and configure:"
+echo -e "   - Company name"
+echo -e "   - SMTP settings"
+echo -e "   - Add users"
+
+echo -e "\n${BLUE}═══════════════════════════════════════${NC}"
+echo -e "${BLUE}  Useful Commands${NC}"
+echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
+
+if [ "$WEB_SERVER" == "1" ]; then
+    echo -e "${YELLOW}Check Nginx status:${NC} sudo systemctl status nginx"
+    echo -e "${YELLOW}Reload Nginx:${NC} sudo systemctl reload nginx"
+    echo -e "${YELLOW}Check Nginx logs:${NC} sudo tail -f /var/log/nginx/error.log"
+else
+    if [ "$OS" == "ubuntu" ] || [ "$OS" == "debian" ]; then
+        echo -e "${YELLOW}Check Apache status:${NC} sudo systemctl status apache2"
+        echo -e "${YELLOW}Reload Apache:${NC} sudo systemctl reload apache2"
+        echo -e "${YELLOW}Check Apache logs:${NC} sudo tail -f /var/log/apache2/error.log"
+    else
+        echo -e "${YELLOW}Check Apache status:${NC} sudo systemctl status httpd"
+        echo -e "${YELLOW}Reload Apache:${NC} sudo systemctl reload httpd"
+        echo -e "${YELLOW}Check Apache logs:${NC} sudo tail -f /var/log/httpd/error_log"
+    fi
+fi
+
+echo -e "${YELLOW}Check MySQL status:${NC} sudo systemctl status mysql"
+echo -e "${YELLOW}Check SSL certificate:${NC} sudo certbot certificates"
+
+echo -e "\n${GREEN}Thank you for using AdminLTE Finance Portal!${NC}\n"
+
+exit 0
