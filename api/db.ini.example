@@ -1,0 +1,5 @@
+; db.ini.example - Copy to db.ini and update with your credentials
+host=localhost
+database=adminlte_finance
+username=finance_user
+password=your_password_here
