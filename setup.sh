@@ -1,7 +1,7 @@
 #!/bin/bash
 # setup.sh - Complete deployment script for AdminLTE Finance Portal
 # Supports: Ubuntu/Debian and RHEL/CentOS/Rocky/AlmaLinux
-# Version: 2.0
+# Version: 2.1 - Improved password handling
 
 set -e
 
@@ -10,6 +10,7 @@ RED='\033[0;31m'
 GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
+CYAN='\033[0;36m'
 NC='\033[0m' # No Color
 
 # Logo
@@ -17,7 +18,7 @@ echo -e "${BLUE}"
 cat << "EOF"
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║     AdminLTE Finance Portal - Auto Installer v2.0        ║
+║     AdminLTE Finance Portal - Auto Installer v2.1        ║
 ║                                                           ║
 ║     MySQL + PHP + Nginx/Apache + SSL + Angular           ║
 ║                                                           ║
@@ -154,6 +155,54 @@ install_nodejs() {
     fi
 }
 
+# Validate password strength
+validate_password() {
+    local password=$1
+    local min_length=8
+
+    if [ ${#password} -lt $min_length ]; then
+        return 1
+    fi
+
+    # Check for uppercase
+    if ! echo "$password" | grep -q "[A-Z]"; then
+        return 1
+    fi
+
+    # Check for lowercase
+    if ! echo "$password" | grep -q "[a-z]"; then
+        return 1
+    fi
+
+    # Check for digit
+    if ! echo "$password" | grep -q "[0-9]"; then
+        return 1
+    fi
+
+    # Check for special character
+    if ! echo "$password" | grep -q "[^a-zA-Z0-9]"; then
+        return 1
+    fi
+
+    return 0
+}
+
+# Check MySQL password policy
+check_mysql_password_policy() {
+    echo -e "${CYAN}Checking MySQL password policy...${NC}"
+
+    local policy=$(mysql -h "$1" -u "$2" -p"$3" -e "SHOW VARIABLES LIKE 'validate_password%';" 2>/dev/null)
+
+    if [ $? -eq 0 ] && [ ! -z "$policy" ]; then
+        echo -e "${YELLOW}MySQL password validation is enabled with the following requirements:${NC}"
+        echo "$policy"
+        return 0
+    else
+        echo -e "${GREEN}No strict password policy detected${NC}"
+        return 1
+    fi
+}
+
 detect_os
 install_mysql
 install_nodejs
@@ -169,20 +218,12 @@ MYSQL_HOST=${MYSQL_HOST:-localhost}
 read -p "MySQL Root Username [root]: " MYSQL_ROOT_USER
 MYSQL_ROOT_USER=${MYSQL_ROOT_USER:-root}
 
-read -sp "MySQL Root Password: " MYSQL_ROOT_PASS
+echo -e "${CYAN}Enter MySQL Root Password (input hidden):${NC}"
+read -sp "Password: " MYSQL_ROOT_PASS
 echo ""
 
-read -p "New Database Name [adminlte_finance]: " DB_NAME
-DB_NAME=${DB_NAME:-adminlte_finance}
-
-read -p "New Database User [finance_user]: " DB_USER
-DB_USER=${DB_USER:-finance_user}
-
-read -sp "New Database User Password: " DB_PASS
-echo -e "\n"
-
 # Test MySQL connection
-echo -e "${YELLOW}Testing MySQL connection...${NC}"
+echo -e "\n${YELLOW}Testing MySQL connection...${NC}"
 if mysql -h "$MYSQL_HOST" -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" -e "SELECT 1;" > /dev/null 2>&1; then
     echo -e "${GREEN}✓ MySQL connection successful${NC}"
 else
@@ -190,9 +231,90 @@ else
     exit 1
 fi
 
+# Check password policy
+check_mysql_password_policy "$MYSQL_HOST" "$MYSQL_ROOT_USER" "$MYSQL_ROOT_PASS"
+
+echo ""
+read -p "New Database Name [adminlte_finance]: " DB_NAME
+DB_NAME=${DB_NAME:-adminlte_finance}
+
+read -p "New Database User [finance_user]: " DB_USER
+DB_USER=${DB_USER:-finance_user}
+
+# Password input with validation
+echo -e "\n${CYAN}╔═══════════════════════════════════════════════════════════╗${NC}"
+echo -e "${CYAN}║  Database User Password Requirements:                    ║${NC}"
+echo -e "${CYAN}║  • Minimum 8 characters                                   ║${NC}"
+echo -e "${CYAN}║  • At least 1 uppercase letter (A-Z)                      ║${NC}"
+echo -e "${CYAN}║  • At least 1 lowercase letter (a-z)                      ║${NC}"
+echo -e "${CYAN}║  • At least 1 number (0-9)                                ║${NC}"
+echo -e "${CYAN}║  • At least 1 special character (!@#$%^&*)                ║${NC}"
+echo -e "${CYAN}║                                                           ║${NC}"
+echo -e "${CYAN}║  Example: Finance@2024!                                   ║${NC}"
+echo -e "${CYAN}╚═══════════════════════════════════════════════════════════╝${NC}\n"
+
+while true; do
+    read -sp "New Database User Password: " DB_PASS
+    echo ""
+    read -sp "Confirm Password: " DB_PASS_CONFIRM
+    echo -e "\n"
+
+    if [ "$DB_PASS" != "$DB_PASS_CONFIRM" ]; then
+        echo -e "${RED}✗ Passwords do not match. Please try again.${NC}\n"
+        continue
+    fi
+
+    if validate_password "$DB_PASS"; then
+        echo -e "${GREEN}✓ Password meets requirements${NC}"
+        break
+    else
+        echo -e "${RED}✗ Password does not meet requirements. Please try again.${NC}"
+        echo -e "${YELLOW}Remember: Min 8 chars, 1 uppercase, 1 lowercase, 1 number, 1 special character${NC}\n"
+    fi
+done
+
+# Offer to adjust MySQL password policy if creation fails
+adjust_password_policy() {
+    echo -e "\n${YELLOW}═══════════════════════════════════════${NC}"
+    echo -e "${YELLOW}  MySQL Password Policy Options${NC}"
+    echo -e "${YELLOW}═══════════════════════════════════════${NC}\n"
+
+    echo "Your password meets basic requirements but MySQL policy is stricter."
+    echo ""
+    echo "Options:"
+    echo "1) Try a stronger password (recommended for production)"
+    echo "2) Temporarily adjust MySQL password policy"
+    echo "3) Exit and configure manually"
+    echo ""
+    read -p "Choose option [1]: " POLICY_OPTION
+    POLICY_OPTION=${POLICY_OPTION:-1}
+
+    case $POLICY_OPTION in
+        2)
+            echo -e "${YELLOW}Adjusting MySQL password policy...${NC}"
+            mysql -h "$MYSQL_HOST" -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" <<POLICY_SQL
+SET GLOBAL validate_password.length = 8;
+SET GLOBAL validate_password.mixed_case_count = 1;
+SET GLOBAL validate_password.number_count = 1;
+SET GLOBAL validate_password.special_char_count = 1;
+SET GLOBAL validate_password.policy = MEDIUM;
+POLICY_SQL
+            echo -e "${GREEN}✓ Password policy adjusted${NC}"
+            return 0
+            ;;
+        3)
+            echo -e "${YELLOW}Exiting. Please configure MySQL manually.${NC}"
+            exit 0
+            ;;
+        *)
+            return 1
+            ;;
+    esac
+}
+
 # Create database and user
-echo -e "${YELLOW}Creating database and user...${NC}"
-mysql -h "$MYSQL_HOST" -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" <<MYSQL_SCRIPT
+echo -e "\n${YELLOW}Creating database and user...${NC}"
+if ! mysql -h "$MYSQL_HOST" -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" <<MYSQL_SCRIPT
 CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
 CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
 CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
@@ -200,8 +322,25 @@ GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';
 GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'%';
 FLUSH PRIVILEGES;
 MYSQL_SCRIPT
+then
+    echo -e "${RED}✗ Failed to create database user${NC}"
 
-echo -e "${GREEN}✓ Database created${NC}"
+    if adjust_password_policy; then
+        echo -e "${YELLOW}Retrying with adjusted policy...${NC}"
+        mysql -h "$MYSQL_HOST" -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" <<MYSQL_SCRIPT
+CREATE DATABASE IF NOT EXISTS ${DB_NAME} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;
+CREATE USER IF NOT EXISTS '${DB_USER}'@'localhost' IDENTIFIED BY '${DB_PASS}';
+CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';
+GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'localhost';
+GRANT ALL PRIVILEGES ON ${DB_NAME}.* TO '${DB_USER}'@'%';
+FLUSH PRIVILEGES;
+MYSQL_SCRIPT
+    else
+        exit 1
+    fi
+fi
+
+echo -e "${GREEN}✓ Database and user created successfully${NC}"
 
 # Import schema
 if [ -f "schema.sql" ]; then
@@ -578,69 +717,4 @@ echo -e "${GREEN}║                                                           �
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}\n"
 
 echo -e "${BLUE}═══════════════════════════════════════${NC}"
-echo -e "${BLUE}  Installation Summary${NC}"
-echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
-
-echo -e "${YELLOW}Domain:${NC} ${DOMAIN}"
-echo -e "${YELLOW}Project Directory:${NC} ${PROJECT_DIR}"
-echo -e "${YELLOW}Database Name:${NC} ${DB_NAME}"
-echo -e "${YELLOW}Database User:${NC} ${DB_USER}"
-if [ "$WEB_SERVER" == "1" ]; then
-    echo -e "${YELLOW}Web Server:${NC} Nginx"
-else
-    echo -e "${YELLOW}Web Server:${NC} Apache"
-fi
-
-if [[ $INSTALL_SSL =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}SSL:${NC} Enabled (Let's Encrypt)"
-else
-    echo -e "${YELLOW}SSL:${NC} Not installed"
-fi
-
-echo -e "\n${BLUE}═══════════════════════════════════════${NC}"
-echo -e "${BLUE}  Default Login Credentials${NC}"
-echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
-
-echo -e "${YELLOW}Username:${NC} admin"
-echo -e "${YELLOW}Password:${NC} password"
-echo -e "${RED}⚠️  IMPORTANT: Change the default password immediately!${NC}\n"
-
-echo -e "${BLUE}═══════════════════════════════════════${NC}"
-echo -e "${BLUE}  Next Steps${NC}"
-echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
-
-echo -e "1. Visit your site: ${GREEN}https://${DOMAIN}${NC}"
-echo -e "2. Login with default credentials"
-echo -e "3. Go to Profile and change your password"
-echo -e "4. Enable 2FA for additional security"
-echo -e "5. Go to Settings and configure:"
-echo -e "   - Company name"
-echo -e "   - SMTP settings"
-echo -e "   - Add users"
-
-echo -e "\n${BLUE}═══════════════════════════════════════${NC}"
-echo -e "${BLUE}  Useful Commands${NC}"
-echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
-
-if [ "$WEB_SERVER" == "1" ]; then
-    echo -e "${YELLOW}Check Nginx status:${NC} sudo systemctl status nginx"
-    echo -e "${YELLOW}Reload Nginx:${NC} sudo systemctl reload nginx"
-    echo -e "${YELLOW}Check Nginx logs:${NC} sudo tail -f /var/log/nginx/error.log"
-else
-    if [ "$OS" == "ubuntu" ] || [ "$OS" == "debian" ]; then
-        echo -e "${YELLOW}Check Apache status:${NC} sudo systemctl status apache2"
-        echo -e "${YELLOW}Reload Apache:${NC} sudo systemctl reload apache2"
-        echo -e "${YELLOW}Check Apache logs:${NC} sudo tail -f /var/log/apache2/error.log"
-    else
-        echo -e "${YELLOW}Check Apache status:${NC} sudo systemctl status httpd"
-        echo -e "${YELLOW}Reload Apache:${NC} sudo systemctl reload httpd"
-        echo -e "${YELLOW}Check Apache logs:${NC} sudo tail -f /var/log/httpd/error_log"
-    fi
-fi
-
-echo -e "${YELLOW}Check MySQL status:${NC} sudo systemctl status mysql"
-echo -e "${YELLOW}Check SSL certificate:${NC} sudo certbot certificates"
-
-echo -e "\n${GREEN}Thank you for using AdminLTE Finance Portal!${NC}\n"
-
-exit 0
+echo -e "${BLUE*
