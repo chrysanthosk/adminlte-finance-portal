@@ -1,7 +1,6 @@
 #!/bin/bash
 # uninstall.sh - Complete uninstaller for AdminLTE Finance Portal
-# This script removes all components installed by setup.sh
-# Version: 1.0
+# Version: 1.1 - Fixed MySQL removal
 
 set -e
 
@@ -11,14 +10,14 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 BLUE='\033[0;34m'
 CYAN='\033[0;36m'
-NC='\033[0m' # No Color
+NC='\033[0m'
 
 # Logo
 echo -e "${RED}"
 cat << "EOF"
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
-║     AdminLTE Finance Portal - Uninstaller v1.0           ║
+║     AdminLTE Finance Portal - Uninstaller v1.1           ║
 ║                                                           ║
 ║     ⚠️  WARNING: This will remove ALL components!        ║
 ║                                                           ║
@@ -26,7 +25,6 @@ cat << "EOF"
 EOF
 echo -e "${NC}"
 
-# Check if running as root or with sudo
 if [ "$EUID" -ne 0 ]; then
     echo -e "${RED}Please run as root or with sudo${NC}"
     exit 1
@@ -39,15 +37,13 @@ detect_os() {
         OS=$ID
         VER=$VERSION_ID
     else
-        echo -e "${RED}Cannot detect OS. Unsupported system.${NC}"
+        echo -e "${RED}Cannot detect OS.${NC}"
         exit 1
     fi
 
     case $OS in
         ubuntu|debian)
             PKG_MANAGER="apt"
-            REMOVE_CMD="apt remove -y"
-            AUTOREMOVE_CMD="apt autoremove -y"
             WEB_USER="www-data"
             ;;
         rhel|centos|rocky|almalinux|fedora)
@@ -55,8 +51,6 @@ detect_os() {
             if command -v dnf &> /dev/null; then
                 PKG_MANAGER="dnf"
             fi
-            REMOVE_CMD="$PKG_MANAGER remove -y"
-            AUTOREMOVE_CMD="$PKG_MANAGER autoremove -y"
             WEB_USER="apache"
             ;;
         *)
@@ -105,38 +99,36 @@ REMOVE_SSL=${REMOVE_SSL:-N}
 
 # Final confirmation
 echo -e "\n${RED}╔═══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${RED}║                                                           ║${NC}"
 echo -e "${RED}║                    FINAL WARNING!                         ║${NC}"
-echo -e "${RED}║                                                           ║${NC}"
 echo -e "${RED}║  This action CANNOT be undone!                            ║${NC}"
-echo -e "${RED}║                                                           ║${NC}"
 echo -e "${RED}╚═══════════════════════════════════════════════════════════╝${NC}\n"
 
 echo -e "${YELLOW}You are about to remove:${NC}"
-[[ $REMOVE_PROJECT =~ ^[Yy]$ ]] && echo -e "  • Project files from ${PROJECT_DIR}"
-[[ $REMOVE_DATABASE =~ ^[Yy]$ ]] && echo -e "  • Database (ALL DATA WILL BE LOST!)"
+[[ $REMOVE_PROJECT =~ ^[Yy]$ ]] && echo -e "  • Project files"
+[[ $REMOVE_DATABASE =~ ^[Yy]$ ]] && echo -e "  • Database (ALL DATA)"
 [[ $REMOVE_MYSQL =~ ^[Yy]$ ]] && echo -e "  • MySQL server"
-[[ $REMOVE_WEBSERVER =~ ^[Yy]$ ]] && echo -e "  • Web server (Nginx/Apache)"
+[[ $REMOVE_WEBSERVER =~ ^[Yy]$ ]] && echo -e "  • Web server"
 [[ $REMOVE_PHP =~ ^[Yy]$ ]] && echo -e "  • PHP"
-[[ $REMOVE_NODEJS =~ ^[Yy]$ ]] && echo -e "  • Node.js and npm"
+[[ $REMOVE_NODEJS =~ ^[Yy]$ ]] && echo -e "  • Node.js"
 [[ $REMOVE_SSL =~ ^[Yy]$ ]] && echo -e "  • SSL certificates"
 
 echo ""
 read -p "Type 'REMOVE' to continue: " CONFIRMATION
 
 if [ "$CONFIRMATION" != "REMOVE" ]; then
-    echo -e "${GREEN}Uninstallation cancelled.${NC}"
+    echo -e "${GREEN}Cancelled.${NC}"
     exit 0
 fi
 
-# Start uninstallation
-echo -e "\n${BLUE}═══════════════════════════════════════${NC}"
-echo -e "${BLUE}  Starting Uninstallation...${NC}"
-echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
+echo -e "\n${BLUE}Starting Uninstallation...${NC}\n"
 
-# Backup database before removal
-if [[ $REMOVE_DATABASE =~ ^[Yy]$ ]]; then
-    echo -e "${YELLOW}Creating database backup before removal...${NC}"
+# Create backup directory
+BACKUP_DIR="${HOME}/adminlte_backup_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+
+# Backup database
+if [[ $REMOVE_DATABASE =~ ^[Yy]$ ]] && command -v mysql &> /dev/null; then
+    echo -e "${YELLOW}Backing up database...${NC}"
     read -p "MySQL Root Username [root]: " MYSQL_ROOT_USER
     MYSQL_ROOT_USER=${MYSQL_ROOT_USER:-root}
     read -sp "MySQL Root Password: " MYSQL_ROOT_PASS
@@ -144,137 +136,116 @@ if [[ $REMOVE_DATABASE =~ ^[Yy]$ ]]; then
     read -p "Database Name [adminlte_finance]: " DB_NAME
     DB_NAME=${DB_NAME:-adminlte_finance}
 
-    BACKUP_DIR="${HOME}/adminlte_backup_$(date +%Y%m%d_%H%M%S)"
-    mkdir -p "$BACKUP_DIR"
-
     if mysqldump -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" "$DB_NAME" > "$BACKUP_DIR/${DB_NAME}.sql" 2>/dev/null; then
-        echo -e "${GREEN}✓ Database backed up to: $BACKUP_DIR/${DB_NAME}.sql${NC}"
+        echo -e "${GREEN}✓ Database backed up${NC}"
     else
-        echo -e "${YELLOW}! Database backup failed (may not exist)${NC}"
+        echo -e "${YELLOW}! Backup failed or database doesn't exist${NC}"
     fi
 fi
 
-# 1. Remove SSL Certificates
-if [[ $REMOVE_SSL =~ ^[Yy]$ ]]; then
-    echo -e "\n${YELLOW}[1/7] Removing SSL certificates...${NC}"
-    if command -v certbot &> /dev/null && [ ! -z "$DOMAIN" ]; then
-        certbot delete --cert-name "$DOMAIN" --non-interactive || echo -e "${YELLOW}! SSL removal failed${NC}"
-        echo -e "${GREEN}✓ SSL certificates removed${NC}"
-    else
-        echo -e "${YELLOW}! Certbot not found or domain not specified${NC}"
-    fi
-else
-    echo -e "\n${CYAN}[1/7] Skipping SSL certificates removal${NC}"
+# 1. Remove SSL
+if [[ $REMOVE_SSL =~ ^[Yy]$ ]] && [ ! -z "$DOMAIN" ]; then
+    echo -e "\n${YELLOW}[1/7] Removing SSL...${NC}"
+    certbot delete --cert-name "$DOMAIN" --non-interactive 2>/dev/null || true
+    echo -e "${GREEN}✓ SSL removed${NC}"
 fi
 
-# 2. Remove Web Server Configuration
-echo -e "\n${YELLOW}[2/7] Removing web server configuration...${NC}"
-
+# 2. Remove web server config
+echo -e "\n${YELLOW}[2/7] Removing web server config...${NC}"
 if [ "$OS" == "ubuntu" ] || [ "$OS" == "debian" ]; then
-    # Nginx
-    if [ -f "/etc/nginx/sites-available/${PROJECT_NAME}" ]; then
-        rm -f "/etc/nginx/sites-enabled/${PROJECT_NAME}"
-        rm -f "/etc/nginx/sites-available/${PROJECT_NAME}"
-        systemctl reload nginx 2>/dev/null || true
-        echo -e "${GREEN}✓ Nginx configuration removed${NC}"
-    fi
-
-    # Apache
-    if [ -f "/etc/apache2/sites-available/${PROJECT_NAME}.conf" ]; then
-        a2dissite "${PROJECT_NAME}" 2>/dev/null || true
-        rm -f "/etc/apache2/sites-available/${PROJECT_NAME}.conf"
-        systemctl reload apache2 2>/dev/null || true
-        echo -e "${GREEN}✓ Apache configuration removed${NC}"
-    fi
+    rm -f "/etc/nginx/sites-enabled/${PROJECT_NAME}" 2>/dev/null || true
+    rm -f "/etc/nginx/sites-available/${PROJECT_NAME}" 2>/dev/null || true
+    rm -f "/etc/apache2/sites-available/${PROJECT_NAME}.conf" 2>/dev/null || true
+    a2dissite "${PROJECT_NAME}" 2>/dev/null || true
 else
-    # RHEL-based
-    if [ -f "/etc/nginx/conf.d/${PROJECT_NAME}.conf" ]; then
-        rm -f "/etc/nginx/conf.d/${PROJECT_NAME}.conf"
-        systemctl reload nginx 2>/dev/null || true
-        echo -e "${GREEN}✓ Nginx configuration removed${NC}"
-    fi
-
-    if [ -f "/etc/httpd/conf.d/${PROJECT_NAME}.conf" ]; then
-        rm -f "/etc/httpd/conf.d/${PROJECT_NAME}.conf"
-        systemctl reload httpd 2>/dev/null || true
-        echo -e "${GREEN}✓ Apache configuration removed${NC}"
-    fi
+    rm -f "/etc/nginx/conf.d/${PROJECT_NAME}.conf" 2>/dev/null || true
+    rm -f "/etc/httpd/conf.d/${PROJECT_NAME}.conf" 2>/dev/null || true
 fi
+systemctl reload nginx 2>/dev/null || true
+systemctl reload apache2 2>/dev/null || true
+systemctl reload httpd 2>/dev/null || true
+echo -e "${GREEN}✓ Config removed${NC}"
 
-# 3. Remove Project Files
-if [[ $REMOVE_PROJECT =~ ^[Yy]$ ]]; then
+# 3. Remove project files
+if [[ $REMOVE_PROJECT =~ ^[Yy]$ ]] && [ -d "$PROJECT_DIR" ]; then
     echo -e "\n${YELLOW}[3/7] Removing project files...${NC}"
-    if [ -d "$PROJECT_DIR" ]; then
-        # Backup important files
-        BACKUP_DIR="${HOME}/adminlte_backup_$(date +%Y%m%d_%H%M%S)"
-        mkdir -p "$BACKUP_DIR"
-
-        if [ -f "${PROJECT_DIR}/api/db.ini" ]; then
-            cp "${PROJECT_DIR}/api/db.ini" "$BACKUP_DIR/" 2>/dev/null || true
-        fi
-
-        if [ -f "${PROJECT_DIR}/INSTALLATION_INFO.txt" ]; then
-            cp "${PROJECT_DIR}/INSTALLATION_INFO.txt" "$BACKUP_DIR/" 2>/dev/null || true
-        fi
-
-        echo -e "${CYAN}Backing up configuration to: $BACKUP_DIR${NC}"
-
-        rm -rf "$PROJECT_DIR"
-        echo -e "${GREEN}✓ Project files removed${NC}"
-    else
-        echo -e "${YELLOW}! Project directory not found: $PROJECT_DIR${NC}"
-    fi
-else
-    echo -e "\n${CYAN}[3/7] Skipping project files removal${NC}"
+    cp "${PROJECT_DIR}/api/db.ini" "$BACKUP_DIR/" 2>/dev/null || true
+    cp "${PROJECT_DIR}/INSTALLATION_INFO.txt" "$BACKUP_DIR/" 2>/dev/null || true
+    rm -rf "$PROJECT_DIR"
+    echo -e "${GREEN}✓ Project removed${NC}"
 fi
 
-# 4. Remove Database
+# 4. Remove database
 if [[ $REMOVE_DATABASE =~ ^[Yy]$ ]]; then
     echo -e "\n${YELLOW}[4/7] Removing database...${NC}"
-
     read -p "Database User [finance_user]: " DB_USER
     DB_USER=${DB_USER:-finance_user}
 
-    if mysql -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" <<MYSQL_SCRIPT 2>/dev/null
+    mysql -u "$MYSQL_ROOT_USER" -p"$MYSQL_ROOT_PASS" <<MYSQL_SCRIPT 2>/dev/null || true
 DROP DATABASE IF EXISTS ${DB_NAME};
 DROP USER IF EXISTS '${DB_USER}'@'localhost';
 DROP USER IF EXISTS '${DB_USER}'@'%';
 FLUSH PRIVILEGES;
 MYSQL_SCRIPT
-    then
-        echo -e "${GREEN}✓ Database and user removed${NC}"
-    else
-        echo -e "${RED}✗ Failed to remove database${NC}"
-    fi
-else
-    echo -e "\n${CYAN}[4/7] Skipping database removal${NC}"
+    echo -e "${GREEN}✓ Database removed${NC}"
 fi
 
-# 5. Remove MySQL
+# 5. Remove MySQL (FIXED)
 if [[ $REMOVE_MYSQL =~ ^[Yy]$ ]]; then
-    echo -e "\n${YELLOW}[5/7] Removing MySQL...${NC}"
+    echo -e "\n${YELLOW}[5/7] Removing MySQL properly...${NC}"
 
     case $OS in
         ubuntu|debian)
+            # Stop MySQL
             systemctl stop mysql 2>/dev/null || true
-            $REMOVE_CMD mysql-server mysql-client
+            killall -9 mysqld 2>/dev/null || true
+
+            # Complete purge
+            echo -e "${CYAN}Purging MySQL packages...${NC}"
+            apt remove --purge -y mysql-server mysql-server-* mysql-client mysql-common mysql-community-server 2>/dev/null || true
+            apt autoremove -y
+            apt autoclean
+
+            # Remove all MySQL directories
+            echo -e "${CYAN}Removing MySQL directories...${NC}"
             rm -rf /var/lib/mysql
+            rm -rf /var/log/mysql
             rm -rf /etc/mysql
+            rm -rf /var/run/mysqld
+            rm -rf /usr/lib/mysql
+            rm -rf /usr/share/mysql
+
+            # Clean dpkg state
+            echo -e "${CYAN}Cleaning dpkg state...${NC}"
+            dpkg --configure -a
+            apt --fix-broken install -y
+
+            # Remove MySQL user/group
+            userdel mysql 2>/dev/null || true
+            groupdel mysql 2>/dev/null || true
             ;;
+
         rhel|centos|rocky|almalinux|fedora)
             systemctl stop mysqld 2>/dev/null || true
-            $REMOVE_CMD mysql-server mysql
+            killall -9 mysqld 2>/dev/null || true
+
+            $PKG_MANAGER remove -y mysql-server mysql mysql-common
+            $PKG_MANAGER clean all
+
             rm -rf /var/lib/mysql
+            rm -rf /var/log/mysql
             rm -rf /etc/my.cnf
+            rm -rf /etc/my.cnf.d
+
+            userdel mysql 2>/dev/null || true
+            groupdel mysql 2>/dev/null || true
             ;;
     esac
 
-    echo -e "${GREEN}✓ MySQL removed${NC}"
-else
-    echo -e "\n${CYAN}[5/7] Skipping MySQL removal${NC}"
+    echo -e "${GREEN}✓ MySQL completely removed${NC}"
 fi
 
-# 6. Remove Web Server
+# 6. Remove web server
 if [[ $REMOVE_WEBSERVER =~ ^[Yy]$ ]]; then
     echo -e "\n${YELLOW}[6/7] Removing web server...${NC}"
 
@@ -282,36 +253,31 @@ if [[ $REMOVE_WEBSERVER =~ ^[Yy]$ ]]; then
         ubuntu|debian)
             if systemctl is-active --quiet nginx; then
                 systemctl stop nginx
-                $REMOVE_CMD nginx
+                apt remove --purge -y nginx nginx-common nginx-core
                 rm -rf /etc/nginx
-                echo -e "${GREEN}✓ Nginx removed${NC}"
             fi
 
             if systemctl is-active --quiet apache2; then
                 systemctl stop apache2
-                $REMOVE_CMD apache2
+                apt remove --purge -y apache2 apache2-*
                 rm -rf /etc/apache2
-                echo -e "${GREEN}✓ Apache removed${NC}"
             fi
             ;;
-        rhel|centos|rocky|almalinux|fedora)
+        *)
             if systemctl is-active --quiet nginx; then
                 systemctl stop nginx
-                $REMOVE_CMD nginx
+                $PKG_MANAGER remove -y nginx
                 rm -rf /etc/nginx
-                echo -e "${GREEN}✓ Nginx removed${NC}"
             fi
 
             if systemctl is-active --quiet httpd; then
                 systemctl stop httpd
-                $REMOVE_CMD httpd
+                $PKG_MANAGER remove -y httpd
                 rm -rf /etc/httpd
-                echo -e "${GREEN}✓ Apache removed${NC}"
             fi
             ;;
     esac
-else
-    echo -e "\n${CYAN}[6/7] Skipping web server removal${NC}"
+    echo -e "${GREEN}✓ Web server removed${NC}"
 fi
 
 # 7. Remove PHP
@@ -320,88 +286,69 @@ if [[ $REMOVE_PHP =~ ^[Yy]$ ]]; then
 
     case $OS in
         ubuntu|debian)
-            # Detect installed PHP version
-            PHP_VERSIONS=$(dpkg -l | grep -oP 'php\d+\.\d+' | sort -u)
-
-            for PHP_VER in $PHP_VERSIONS; do
-                echo -e "${CYAN}Removing PHP $PHP_VER...${NC}"
-                systemctl stop ${PHP_VER}-fpm 2>/dev/null || true
-                $REMOVE_CMD ${PHP_VER}* libapache2-mod-${PHP_VER}
+            # Stop all PHP-FPM services
+            for svc in $(systemctl list-units --type=service | grep php.*fpm | awk '{print $1}'); do
+                systemctl stop $svc 2>/dev/null || true
             done
 
+            # Remove all PHP packages
+            apt remove --purge -y php* libapache2-mod-php*
             rm -rf /etc/php
             ;;
-        rhel|centos|rocky|almalinux|fedora)
+        *)
             systemctl stop php-fpm 2>/dev/null || true
-            $REMOVE_CMD php php-*
+            $PKG_MANAGER remove -y php php-*
             rm -rf /etc/php.ini
             rm -rf /etc/php-fpm.d
             ;;
     esac
-
     echo -e "${GREEN}✓ PHP removed${NC}"
-else
-    echo -e "\n${CYAN}[7/7] Skipping PHP removal${NC}"
 fi
 
-# 8. Remove Node.js (Bonus)
+# 8. Remove Node.js
 if [[ $REMOVE_NODEJS =~ ^[Yy]$ ]]; then
-    echo -e "\n${YELLOW}[Bonus] Removing Node.js and npm...${NC}"
-
-    # Remove global Angular CLI
+    echo -e "\n${YELLOW}[Bonus] Removing Node.js...${NC}"
     npm uninstall -g @angular/cli 2>/dev/null || true
 
     case $OS in
         ubuntu|debian)
-            $REMOVE_CMD nodejs npm
+            apt remove --purge -y nodejs npm
             rm -rf /etc/apt/sources.list.d/nodesource.list
-            rm -rf ~/.npm
-            rm -rf /usr/lib/node_modules
             ;;
-        rhel|centos|rocky|almalinux|fedora)
-            $REMOVE_CMD nodejs npm
+        *)
+            $PKG_MANAGER remove -y nodejs npm
             rm -rf /etc/yum.repos.d/nodesource*.repo
-            rm -rf ~/.npm
-            rm -rf /usr/lib/node_modules
             ;;
     esac
 
-    echo -e "${GREEN}✓ Node.js and npm removed${NC}"
+    rm -rf ~/.npm
+    rm -rf /usr/lib/node_modules
+    echo -e "${GREEN}✓ Node.js removed${NC}"
 fi
 
-# Autoremove
-echo -e "\n${YELLOW}Cleaning up unused packages...${NC}"
-$AUTOREMOVE_CMD 2>/dev/null || true
+# Final cleanup
+echo -e "\n${YELLOW}Final cleanup...${NC}"
+case $OS in
+    ubuntu|debian)
+        apt autoremove -y
+        apt autoclean
+        dpkg --configure -a
+        apt --fix-broken install -y
+        ;;
+    *)
+        $PKG_MANAGER autoremove -y
+        $PKG_MANAGER clean all
+        ;;
+esac
 
-# Final Summary
+# Summary
 echo -e "\n${GREEN}╔═══════════════════════════════════════════════════════════╗${NC}"
-echo -e "${GREEN}║                                                           ║${NC}"
-echo -e "${GREEN}║           Uninstallation Completed!                       ║${NC}"
-echo -e "${GREEN}║                                                           ║${NC}"
+echo -e "${GREEN}║         Uninstallation Completed Successfully!           ║${NC}"
 echo -e "${GREEN}╚═══════════════════════════════════════════════════════════╝${NC}\n"
 
-echo -e "${BLUE}═══════════════════════════════════════${NC}"
-echo -e "${BLUE}  Uninstallation Summary${NC}"
-echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
+echo -e "${YELLOW}Backup saved to:${NC} ${CYAN}$BACKUP_DIR${NC}\n"
+ls -lh "$BACKUP_DIR" 2>/dev/null || true
 
-[[ $REMOVE_PROJECT =~ ^[Yy]$ ]] && echo -e "${GREEN}✓ Project files removed${NC}"
-[[ $REMOVE_DATABASE =~ ^[Yy]$ ]] && echo -e "${GREEN}✓ Database removed${NC}"
-[[ $REMOVE_MYSQL =~ ^[Yy]$ ]] && echo -e "${GREEN}✓ MySQL removed${NC}"
-[[ $REMOVE_WEBSERVER =~ ^[Yy]$ ]] && echo -e "${GREEN}✓ Web server removed${NC}"
-[[ $REMOVE_PHP =~ ^[Yy]$ ]] && echo -e "${GREEN}✓ PHP removed${NC}"
-[[ $REMOVE_NODEJS =~ ^[Yy]$ ]] && echo -e "${GREEN}✓ Node.js removed${NC}"
-[[ $REMOVE_SSL =~ ^[Yy]$ ]] && echo -e "${GREEN}✓ SSL certificates removed${NC}"
-
-if [ -d "$BACKUP_DIR" ]; then
-    echo -e "\n${BLUE}═══════════════════════════════════════${NC}"
-    echo -e "${BLUE}  Backup Location${NC}"
-    echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
-    echo -e "${YELLOW}Configuration backup saved to:${NC}"
-    echo -e "${CYAN}$BACKUP_DIR${NC}\n"
-    ls -lh "$BACKUP_DIR"
-fi
-
-echo -e "\n${YELLOW}Note: Some configuration files may remain in system directories.${NC}"
-echo -e "${YELLOW}You can manually remove them if needed.${NC}\n"
+echo -e "${GREEN}System is now clean and ready for fresh installation!${NC}\n"
 
 exit 0
