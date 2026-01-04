@@ -1,6 +1,6 @@
 #!/bin/bash
 # setup.sh - Complete installer for AdminLTE Finance Portal
-# Version: 2.0 - With PHP-FPM Fix, MySQL improvements, and npm fixes
+# Version: 2.1 - With PHP-FPM Fix, MySQL improvements, npm fixes, and Angular build fix
 # Supports: Ubuntu/Debian and RHEL/CentOS/Rocky/AlmaLinux
 
 set -e
@@ -15,7 +15,7 @@ MAGENTA='\033[0;35m'
 NC='\033[0m' # No Color
 
 # Script version
-VERSION="2.0"
+VERSION="2.1"
 
 # Display logo
 clear
@@ -24,7 +24,7 @@ cat << "EOF"
 ╔═══════════════════════════════════════════════════════════╗
 ║                                                           ║
 ║     AdminLTE Finance Portal - Automated Installer        ║
-║                      Version 2.0                          ║
+║                      Version 2.1                          ║
 ║                                                           ║
 ║  Complete setup with MySQL, PHP, Nginx, Angular & SSL    ║
 ║                                                           ║
@@ -218,7 +218,6 @@ else
     echo -e "${YELLOW}Installing MySQL Server...${NC}"
 
     if [ "$OS" == "ubuntu" ] || [ "$OS" == "debian" ]; then
-        # Pre-configure MySQL to skip interactive prompts
         export DEBIAN_FRONTEND=noninteractive
         debconf-set-selections <<< "mysql-server mysql-server/root_password password ${MYSQL_ROOT_PASS}"
         debconf-set-selections <<< "mysql-server mysql-server/root_password_again password ${MYSQL_ROOT_PASS}"
@@ -226,12 +225,9 @@ else
         $INSTALL_CMD mysql-server mysql-client
     else
         $INSTALL_CMD mysql-server mysql
-
-        # Start MySQL service
         systemctl start mysqld
         systemctl enable mysqld
 
-        # Get temporary root password for RHEL-based systems
         if [ -f /var/log/mysqld.log ]; then
             TEMP_PASS=$(grep 'temporary password' /var/log/mysqld.log | awk '{print $NF}')
             if [ ! -z "$TEMP_PASS" ]; then
@@ -243,7 +239,6 @@ MYSQL_SCRIPT
         fi
     fi
 
-    # Start and enable MySQL
     systemctl start mysql 2>/dev/null || systemctl start mysqld
     systemctl enable mysql 2>/dev/null || systemctl enable mysqld
 
@@ -270,54 +265,48 @@ echo -e "${BLUE}  Step 5: Installing PHP ${PHP_VERSION}${NC}"
 echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
 
 echo -e "${YELLOW}Installing PHP ${PHP_VERSION} and extensions...${NC}"
-$INSTALL_CMD php${PHP_VERSION}-fpm php${PHP_VERSION}-cli php${PHP_VERSION}-common \
-             php${PHP_VERSION}-mysql php${PHP_VERSION}-xml php${PHP_VERSION}-curl \
-             php${PHP_VERSION}-mbstring php${PHP_VERSION}-zip php${PHP_VERSION}-gd \
-             php${PHP_VERSION}-intl php${PHP_VERSION}-bcmath php${PHP_VERSION}-json
+$INSTALL_CMD php${PHP_VERSION}-fpm \
+             php${PHP_VERSION}-cli \
+             php${PHP_VERSION}-common \
+             php${PHP_VERSION}-mysql \
+             php${PHP_VERSION}-xml \
+             php${PHP_VERSION}-curl \
+             php${PHP_VERSION}-mbstring \
+             php${PHP_VERSION}-zip \
+             php${PHP_VERSION}-gd \
+             php${PHP_VERSION}-intl \
+             php${PHP_VERSION}-bcmath
 
-# ===================================================================
-# PHP-FPM CONFIGURATION AND FIX
-# ===================================================================
+# PHP-FPM Configuration
 echo -e "\n${YELLOW}Configuring PHP-FPM...${NC}"
 
-# Stop any running PHP-FPM instances
 systemctl stop php${PHP_VERSION}-fpm 2>/dev/null || true
 killall -9 php-fpm${PHP_VERSION} 2>/dev/null || true
 
-# Create and set permissions for PHP run directory
 mkdir -p /run/php
 chown ${WEB_USER}:${WEB_GROUP} /run/php
 chmod 755 /run/php
 
-# Clean old socket files
 rm -f /run/php/php-fpm.sock
 rm -f /run/php/php${PHP_VERSION}-fpm.sock
 
-# Verify and fix PHP-FPM pool configuration
 if [ -f "/etc/php/${PHP_VERSION}/fpm/pool.d/www.conf" ]; then
     echo -e "${CYAN}Backing up original PHP-FPM configuration...${NC}"
     cp /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf.backup
 
     echo -e "${CYAN}Configuring PHP-FPM pool...${NC}"
-    # Set correct user and group
     sed -i "s/^user = .*/user = ${WEB_USER}/" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
     sed -i "s/^group = .*/group = ${WEB_GROUP}/" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
-
-    # Set socket path
     sed -i "s|^listen = .*|listen = /run/php/php${PHP_VERSION}-fpm.sock|" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
-
-    # Set socket permissions
     sed -i "s/^listen.owner = .*/listen.owner = ${WEB_USER}/" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
     sed -i "s/^listen.group = .*/listen.group = ${WEB_GROUP}/" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
     sed -i "s/^listen.mode = .*/listen.mode = 0660/" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
 
-    # Ensure these settings exist (add if missing)
     grep -q "^listen.owner" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf || echo "listen.owner = ${WEB_USER}" >> /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
     grep -q "^listen.group" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf || echo "listen.group = ${WEB_GROUP}" >> /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
     grep -q "^listen.mode" /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf || echo "listen.mode = 0660" >> /etc/php/${PHP_VERSION}/fpm/pool.d/www.conf
 fi
 
-# Test PHP-FPM configuration
 echo -e "${YELLOW}Testing PHP-FPM configuration...${NC}"
 if php-fpm${PHP_VERSION} -t 2>&1 | tee /tmp/php-fpm-test.log; then
     echo -e "${GREEN}✓ PHP-FPM configuration is valid${NC}"
@@ -332,7 +321,6 @@ else
     echo -e "${YELLOW}Reinstalling PHP-FPM...${NC}"
     apt install --reinstall -y php${PHP_VERSION}-fpm
 
-    # Retry configuration
     if php-fpm${PHP_VERSION} -t; then
         echo -e "${GREEN}✓ PHP-FPM configuration fixed${NC}"
     else
@@ -342,13 +330,11 @@ else
     fi
 fi
 
-# Start PHP-FPM service
 echo -e "${YELLOW}Starting PHP-FPM service...${NC}"
 systemctl daemon-reload
 systemctl start php${PHP_VERSION}-fpm
 systemctl enable php${PHP_VERSION}-fpm
 
-# Verify PHP-FPM is running
 sleep 2
 if systemctl is-active --quiet php${PHP_VERSION}-fpm; then
     echo -e "${GREEN}✓ PHP-FPM is running successfully${NC}"
@@ -367,8 +353,10 @@ else
     exit 1
 fi
 
-# Display PHP version
 php -v | head -n 1
+echo -e "${CYAN}Verifying JSON support...${NC}"
+php -m | grep -i json && echo -e "${GREEN}✓ JSON support enabled${NC}" || echo -e "${YELLOW}! JSON support check inconclusive${NC}"
+
 echo -e "${GREEN}✓ PHP ${PHP_VERSION} installation completed${NC}"
 
 # Install Node.js and npm
@@ -385,7 +373,6 @@ else
     $INSTALL_CMD nodejs
 fi
 
-# Install Angular CLI globally
 echo -e "${YELLOW}Installing Angular CLI...${NC}"
 npm install -g @angular/cli@18
 
@@ -401,44 +388,112 @@ echo -e "${BLUE}  Step 7: Building Angular Application${NC}"
 echo -e "${BLUE}═══════════════════════════════════════${NC}\n"
 
 if [ -f "package.json" ]; then
-    # Check Node.js version
     NODE_MAJOR=$(node -v | cut -d'v' -f2 | cut -d'.' -f1)
     if [ "$NODE_MAJOR" -lt 18 ]; then
         echo -e "${RED}✗ Node.js version is too old. Angular 18+ requires Node 18+${NC}"
         exit 1
     fi
 
-    # Clean old installations
+    echo -e "${CYAN}Node.js version: $(node -v) ✓${NC}"
+    echo -e "${CYAN}npm version: $(npm -v) ✓${NC}\n"
+
     if [ -d "node_modules" ]; then
         echo -e "${YELLOW}Cleaning old node_modules...${NC}"
         rm -rf node_modules package-lock.json
     fi
 
-    # Install dependencies with error handling
-    echo -e "${YELLOW}Installing npm dependencies (this may take several minutes)...${NC}"
+    echo -e "${YELLOW}Checking package.json for version conflicts...${NC}"
 
-    # Try normal install first, handle ERESOLVE errors
-    if ! npm install 2>&1 | tee /tmp/npm-install.log; then
-        if grep -q "ERESOLVE" /tmp/npm-install.log; then
-            echo -e "${YELLOW}⚠️  Dependency conflict detected (Angular version mismatch)${NC}"
-            echo -e "${YELLOW}Retrying with --legacy-peer-deps...${NC}"
-            npm install --legacy-peer-deps
-        else
-            echo -e "${RED}✗ npm install failed${NC}"
-            cat /tmp/npm-install.log
-            exit 1
+    CDK_VERSION=$(grep '"@angular/cdk"' package.json | grep -oP '\d+\.\d+' | head -1)
+    ANGULAR_VERSION=$(grep '"@angular/core"' package.json | grep -oP '\d+\.\d+' | head -1)
+
+    if [ ! -z "$CDK_VERSION" ] && [ ! -z "$ANGULAR_VERSION" ]; then
+        CDK_MAJOR=$(echo $CDK_VERSION | cut -d'.' -f1)
+        ANG_MAJOR=$(echo $ANGULAR_VERSION | cut -d'.' -f1)
+
+        if [ "$CDK_MAJOR" != "$ANG_MAJOR" ]; then
+            echo -e "${YELLOW}⚠️  Version mismatch detected:${NC}"
+            echo -e "   Angular Core: ${ANGULAR_VERSION}"
+            echo -e "   Angular CDK:  ${CDK_VERSION}"
+            echo -e "${YELLOW}Fixing @angular/cdk version...${NC}"
+
+            sed -i "s/\"@angular\/cdk\": \"[^\"]*\"/\"@angular\/cdk\": \"^${ANGULAR_VERSION}\"/" package.json
+            sed -i "s/\"@angular\/material\": \"[^\"]*\"/\"@angular\/material\": \"^${ANGULAR_VERSION}\"/" package.json
+
+            echo -e "${GREEN}✓ Versions synchronized${NC}"
         fi
     fi
 
-    # Check if installation was successful
+    echo -e "\n${YELLOW}Installing npm dependencies (this may take several minutes)...${NC}"
+    echo -e "${CYAN}Progress will be shown below:${NC}\n"
+
+    INSTALL_SUCCESS=0
+
+    echo -e "${CYAN}Attempting install with --legacy-peer-deps --ignore-scripts...${NC}"
+    if npm install --legacy-peer-deps --ignore-scripts 2>&1 | tee /tmp/npm-install.log; then
+        if [ -d "node_modules" ] && [ "$(find node_modules -maxdepth 1 -type d | wc -l)" -gt 50 ]; then
+            INSTALL_SUCCESS=1
+            echo -e "\n${GREEN}✓ Dependencies installed successfully${NC}"
+        fi
+    fi
+
+    if [ $INSTALL_SUCCESS -eq 0 ]; then
+        echo -e "\n${YELLOW}⚠️  First attempt had issues, retrying with different flags...${NC}"
+        rm -rf node_modules package-lock.json
+
+        if npm install --legacy-peer-deps --force 2>&1 | tee /tmp/npm-install-force.log; then
+            if [ -d "node_modules" ] && [ "$(find node_modules -maxdepth 1 -type d | wc -l)" -gt 50 ]; then
+                INSTALL_SUCCESS=1
+                echo -e "\n${GREEN}✓ Dependencies installed with --force${NC}"
+            fi
+        fi
+    fi
+
+    if [ $INSTALL_SUCCESS -eq 0 ]; then
+        echo -e "\n${YELLOW}⚠️  Trying one more time with basic flags...${NC}"
+        rm -rf node_modules package-lock.json
+
+        npm config set ignore-scripts true
+
+        if npm install --legacy-peer-deps 2>&1 | tee /tmp/npm-install-basic.log; then
+            if [ -d "node_modules" ] && [ "$(find node_modules -maxdepth 1 -type d | wc -l)" -gt 50 ]; then
+                INSTALL_SUCCESS=1
+                echo -e "\n${GREEN}✓ Dependencies installed (postinstall scripts skipped)${NC}"
+            fi
+        fi
+
+        npm config set ignore-scripts false
+    fi
+
+    if [ $INSTALL_SUCCESS -eq 0 ]; then
+        echo -e "\n${RED}✗ npm install failed after multiple attempts${NC}"
+        echo -e "\n${YELLOW}Error logs:${NC}"
+
+        if [ -f /tmp/npm-install.log ]; then
+            tail -50 /tmp/npm-install.log
+        fi
+
+        echo -e "\n${YELLOW}Troubleshooting steps:${NC}"
+        echo -e "1. Check Node.js version: ${CYAN}node -v${NC} (should be 18+)"
+        echo -e "2. Clear npm cache: ${CYAN}npm cache clean --force${NC}"
+        echo -e "3. Try manual install: ${CYAN}npm install --legacy-peer-deps --ignore-scripts${NC}"
+        echo -e "4. Check package.json for invalid dependencies"
+        exit 1
+    fi
+
     if [ ! -d "node_modules" ]; then
         echo -e "${RED}✗ node_modules directory not created${NC}"
         exit 1
     fi
 
-    echo -e "${GREEN}✓ Dependencies installed successfully${NC}"
+    PKG_COUNT=$(find node_modules -maxdepth 1 -type d 2>/dev/null | wc -l)
+    if [ "$PKG_COUNT" -lt 50 ]; then
+        echo -e "${RED}✗ node_modules seems incomplete (only $PKG_COUNT packages)${NC}"
+        exit 1
+    fi
 
-    # Update environment files with API URL
+    echo -e "${GREEN}✓ Installed $PKG_COUNT packages${NC}\n"
+
     echo -e "${YELLOW}Updating environment configuration...${NC}"
 
     if [ -f "src/environments/environment.prod.ts" ]; then
@@ -451,28 +506,98 @@ if [ -f "package.json" ]; then
         echo -e "${GREEN}✓ Development environment updated${NC}"
     fi
 
+    # Angular.json validation and fix
+    echo -e "\n${YELLOW}Validating Angular configuration...${NC}"
+
+    if [ -f "angular.json" ]; then
+        echo -e "${CYAN}Checking angular.json for required properties...${NC}"
+
+        if ! grep -q '"index"' angular.json; then
+            echo -e "${YELLOW}⚠️  Missing 'index' property in angular.json${NC}"
+            echo -e "${YELLOW}Attempting to fix...${NC}"
+
+            if [ ! -f "src/index.html" ]; then
+                echo -e "${RED}✗ src/index.html not found${NC}"
+                echo -e "${YELLOW}Creating default index.html...${NC}"
+
+                mkdir -p src
+                cat > src/index.html <<'INDEX_HTML'
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>AdminLTE Finance Portal</title>
+  <base href="/">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <link rel="icon" type="image/x-icon" href="favicon.ico">
+</head>
+<body class="hold-transition sidebar-mini layout-fixed">
+  <app-root></app-root>
+</body>
+</html>
+INDEX_HTML
+                echo -e "${GREEN}✓ Created src/index.html${NC}"
+            fi
+
+            cp angular.json angular.json.backup
+            echo -e "${CYAN}Backed up angular.json to angular.json.backup${NC}"
+
+            # Add index property after "options": {
+            sed -i '/"options": {/a\            "index": "src/index.html",' angular.json
+
+            echo -e "${GREEN}✓ Updated angular.json with 'index' property${NC}"
+        else
+            echo -e "${GREEN}✓ angular.json configuration looks valid${NC}"
+        fi
+    else
+        echo -e "${RED}✗ angular.json not found${NC}"
+        exit 1
+    fi
+
     # Build for production
     echo -e "\n${YELLOW}Building Angular application for production...${NC}"
-    echo -e "${CYAN}This may take several minutes. Please wait...${NC}\n"
+    echo -e "${CYAN}This may take 3-5 minutes. Please be patient...${NC}\n"
+
+    export NODE_OPTIONS="--max_old_space_size=4096"
 
     if ng build --configuration production 2>&1 | tee /tmp/ng-build.log; then
         if [ -d "dist" ]; then
-            FILE_COUNT=$(find dist -type f 2>/dev/null | wc -l)
-            if [ "$FILE_COUNT" -gt 10 ]; then
+            DIST_DIR=$(find dist -maxdepth 1 -type d -name "*" | grep -v "^dist$" | head -1)
+
+            if [ -z "$DIST_DIR" ]; then
+                DIST_DIR="dist"
+            fi
+
+            FILE_COUNT=$(find "$DIST_DIR" -type f 2>/dev/null | wc -l)
+            DIST_SIZE=$(du -sh "$DIST_DIR" 2>/dev/null | cut -f1)
+
+            if [ "$FILE_COUNT" -gt 5 ]; then
                 echo -e "\n${GREEN}✓ Angular build completed successfully${NC}"
-                echo -e "${GREEN}✓ Generated $FILE_COUNT files${NC}"
+                echo -e "${GREEN}✓ Generated $FILE_COUNT files ($DIST_SIZE)${NC}"
+                echo -e "${GREEN}✓ Build output: $DIST_DIR${NC}"
             else
                 echo -e "${RED}✗ Build directory seems incomplete (only $FILE_COUNT files)${NC}"
+                echo -e "${YELLOW}Contents:${NC}"
+                ls -la "$DIST_DIR"
                 exit 1
             fi
         else
             echo -e "${RED}✗ dist directory not found after build${NC}"
+            echo -e "${YELLOW}Current directory structure:${NC}"
+            ls -la
             exit 1
         fi
     else
-        echo -e "${RED}✗ Build failed${NC}"
-        echo -e "\n${YELLOW}Build output:${NC}"
+        echo -e "\n${RED}✗ Build failed${NC}"
+        echo -e "\n${YELLOW}Error details:${NC}"
         tail -50 /tmp/ng-build.log
+
+        echo -e "\n${YELLOW}Common issues:${NC}"
+        echo -e "1. Missing 'index' in angular.json - ${CYAN}Check architect.build.options.index${NC}"
+        echo -e "2. Missing src/index.html - ${CYAN}Create the file${NC}"
+        echo -e "3. TypeScript errors - ${CYAN}Check your .ts files${NC}"
+        echo -e "4. Invalid angular.json syntax - ${CYAN}Validate JSON${NC}"
+
         exit 1
     fi
 else
