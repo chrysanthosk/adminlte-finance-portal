@@ -4,6 +4,7 @@ import { AuthService } from '../../services/auth.service';
 import { CommonModule } from '@angular/common';
 
 @Component({
+  standalone: true,
   selector: 'app-login',
   imports: [ReactiveFormsModule, CommonModule, FormsModule],
   template: `
@@ -153,7 +154,7 @@ export class LoginComponent {
       document.documentElement.classList.remove('dark');
     }
   }
-   onLoginSubmit() {
+   async onLoginSubmit() {
     if (this.loginForm.valid) {
       this.error.set('');
       const { username, password } = this.loginForm.value;

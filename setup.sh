@@ -506,21 +506,139 @@ if [ -f "package.json" ]; then
         echo -e "${GREEN}✓ Development environment updated${NC}"
     fi
 
-    # Angular.json validation and fix
-    echo -e "\n${YELLOW}Validating Angular configuration...${NC}"
+    # Angular project structure detection
+    echo -e "\n${YELLOW}Detecting Angular project structure...${NC}"
+
+    IS_STANDALONE=0
+    if [ -f "src/app.component.ts" ] && [ -f "src/app.routes.ts" ] && [ ! -d "src/app" ]; then
+        IS_STANDALONE=1
+        echo -e "${CYAN}✓ Detected: Angular 18+ Standalone structure${NC}"
+    elif [ -d "src/app" ] && [ -f "src/app/app.module.ts" ]; then
+        echo -e "${CYAN}✓ Detected: Traditional module-based structure${NC}"
+    else
+        echo -e "${YELLOW}⚠️  Project structure unclear, attempting standalone setup...${NC}"
+        IS_STANDALONE=1
+    fi
+
+    # Create required files based on structure
+    if [ $IS_STANDALONE -eq 1 ]; then
+        echo -e "${YELLOW}Setting up standalone Angular application files...${NC}"
+
+        if [ ! -f "src/app.config.ts" ]; then
+            echo -e "${CYAN}Creating src/app.config.ts...${NC}"
+            cat > src/app.config.ts <<'APP_CONFIG'
+import { ApplicationConfig } from '@angular/core';
+import { provideRouter } from '@angular/router';
+import { provideHttpClient } from '@angular/common/http';
+import { routes } from './app.routes';
+
+export const appConfig: ApplicationConfig = {
+  providers: [
+    provideRouter(routes),
+    provideHttpClient()
+  ]
+};
+APP_CONFIG
+            echo -e "${GREEN}✓ Created app.config.ts${NC}"
+        fi
+
+        if [ -f "src/main.ts" ]; then
+            if ! grep -q "bootstrapApplication" src/main.ts; then
+                echo -e "${CYAN}Updating src/main.ts for standalone bootstrap...${NC}"
+                cat > src/main.ts <<'MAIN_TS'
+import { bootstrapApplication } from '@angular/platform-browser';
+import { AppComponent } from './app.component';
+import { appConfig } from './app.config';
+
+bootstrapApplication(AppComponent, appConfig)
+  .catch(err => console.error(err));
+MAIN_TS
+                echo -e "${GREEN}✓ Updated main.ts${NC}"
+            fi
+        else
+            echo -e "${CYAN}Creating src/main.ts...${NC}"
+            cat > src/main.ts <<'MAIN_TS'
+import { bootstrapApplication } from '@angular/platform-browser';
+import { AppComponent } from './app.component';
+import { appConfig } from './app.config';
+
+bootstrapApplication(AppComponent, appConfig)
+  .catch(err => console.error(err));
+MAIN_TS
+            echo -e "${GREEN}✓ Created main.ts${NC}"
+        fi
+    else
+        if [ ! -f "src/main.ts" ]; then
+            echo -e "${CYAN}Creating src/main.ts...${NC}"
+            cat > src/main.ts <<'MAIN_MODULE'
+import { platformBrowserDynamic } from '@angular/platform-browser-dynamic';
+import { AppModule } from './app/app.module';
+
+platformBrowserDynamic().bootstrapModule(AppModule)
+  .catch(err => console.error(err));
+MAIN_MODULE
+            echo -e "${GREEN}✓ Created main.ts${NC}"
+        fi
+    fi
+
+    # TypeScript configuration validation
+    echo -e "\n${YELLOW}Validating TypeScript configuration...${NC}"
+
+    if [ ! -f "tsconfig.app.json" ]; then
+        echo -e "${YELLOW}Creating tsconfig.app.json...${NC}"
+        cat > tsconfig.app.json <<'TSCONFIG_APP'
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/app",
+    "types": []
+  },
+  "files": [
+    "src/main.ts"
+  ],
+  "include": [
+    "src/**/*.d.ts"
+  ]
+}
+TSCONFIG_APP
+        echo -e "${GREEN}✓ Created tsconfig.app.json${NC}"
+    else
+        echo -e "${GREEN}✓ tsconfig.app.json exists${NC}"
+    fi
+
+    if [ ! -f "tsconfig.spec.json" ]; then
+        echo -e "${YELLOW}Creating tsconfig.spec.json...${NC}"
+        cat > tsconfig.spec.json <<'TSCONFIG_SPEC'
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/spec",
+    "types": [
+      "jasmine"
+    ]
+  },
+  "include": [
+    "src/**/*.spec.ts",
+    "src/**/*.d.ts"
+  ]
+}
+TSCONFIG_SPEC
+        echo -e "${GREEN}✓ Created tsconfig.spec.json${NC}"
+    else
+        echo -e "${GREEN}✓ tsconfig.spec.json exists${NC}"
+    fi
+
+    # Validate angular.json
+    echo -e "\n${YELLOW}Validating angular.json configuration...${NC}"
 
     if [ -f "angular.json" ]; then
         echo -e "${CYAN}Checking angular.json for required properties...${NC}"
 
         if ! grep -q '"index"' angular.json; then
             echo -e "${YELLOW}⚠️  Missing 'index' property in angular.json${NC}"
-            echo -e "${YELLOW}Attempting to fix...${NC}"
 
             if [ ! -f "src/index.html" ]; then
-                echo -e "${RED}✗ src/index.html not found${NC}"
-                echo -e "${YELLOW}Creating default index.html...${NC}"
-
-                mkdir -p src
+                echo -e "${YELLOW}Creating src/index.html...${NC}"
                 cat > src/index.html <<'INDEX_HTML'
 <!doctype html>
 <html lang="en">
@@ -540,19 +658,40 @@ INDEX_HTML
             fi
 
             cp angular.json angular.json.backup
-            echo -e "${CYAN}Backed up angular.json to angular.json.backup${NC}"
+            echo -e "${CYAN}Backed up angular.json${NC}"
 
-            # Add index property after "options": {
             sed -i '/"options": {/a\            "index": "src/index.html",' angular.json
-
             echo -e "${GREEN}✓ Updated angular.json with 'index' property${NC}"
         else
-            echo -e "${GREEN}✓ angular.json configuration looks valid${NC}"
+            echo -e "${GREEN}✓ angular.json has 'index' property${NC}"
+        fi
+
+        # Verify tsConfig reference
+        if ! grep -q '"tsConfig".*"tsconfig.app.json"' angular.json; then
+            echo -e "${YELLOW}⚠️  Updating tsConfig reference in angular.json...${NC}"
+            sed -i 's|"tsConfig": "[^"]*"|"tsConfig": "tsconfig.app.json"|' angular.json
+            echo -e "${GREEN}✓ Updated tsConfig reference${NC}"
         fi
     else
         echo -e "${RED}✗ angular.json not found${NC}"
         exit 1
     fi
+
+    # Verify critical files exist
+    echo -e "\n${YELLOW}Verifying project files...${NC}"
+
+    MISSING_FILES=0
+
+    [ ! -f "src/main.ts" ] && echo -e "${RED}✗ Missing: src/main.ts${NC}" && MISSING_FILES=1
+    [ ! -f "src/index.html" ] && echo -e "${RED}✗ Missing: src/index.html${NC}" && MISSING_FILES=1
+    [ ! -f "src/app.component.ts" ] && echo -e "${RED}✗ Missing: src/app.component.ts${NC}" && MISSING_FILES=1
+
+    if [ $MISSING_FILES -eq 1 ]; then
+        echo -e "\n${RED}✗ Critical files are missing. Cannot proceed with build.${NC}"
+        exit 1
+    fi
+
+    echo -e "${GREEN}✓ All required files present${NC}"
 
     # Build for production
     echo -e "\n${YELLOW}Building Angular application for production...${NC}"
@@ -593,10 +732,10 @@ INDEX_HTML
         tail -50 /tmp/ng-build.log
 
         echo -e "\n${YELLOW}Common issues:${NC}"
-        echo -e "1. Missing 'index' in angular.json - ${CYAN}Check architect.build.options.index${NC}"
-        echo -e "2. Missing src/index.html - ${CYAN}Create the file${NC}"
+        echo -e "1. Missing tsconfig.app.json - ${CYAN}File should now exist${NC}"
+        echo -e "2. Missing src/index.html - ${CYAN}File should now exist${NC}"
         echo -e "3. TypeScript errors - ${CYAN}Check your .ts files${NC}"
-        echo -e "4. Invalid angular.json syntax - ${CYAN}Validate JSON${NC}"
+        echo -e "4. Check build log: ${CYAN}cat /tmp/ng-build.log${NC}"
 
         exit 1
     fi

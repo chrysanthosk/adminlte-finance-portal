@@ -1,0 +1,30 @@
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "outDir": "./out-tsc/app",
+    "types": []
+  },
+  "files": [
+    "src/main.ts"
+  ],
+  "include": [
+    "src/**/*.d.ts"
+  ]
+}
+EOF
+
+# Create tsconfig.spec.json (for testing)
+cat > tsconfig.spec.json <<'EOF'
+{
+"extends": "./tsconfig.json",
+"compilerOptions": {
+"outDir": "./out-tsc/spec",
+"types": [
+"jasmine"
+]
+},
+"include": [
+"src/**/*.spec.ts",
+"src/**/*.d.ts"
+]
+}

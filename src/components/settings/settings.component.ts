@@ -7,6 +7,7 @@ type Tab = 'general' | 'users' | 'email' | 'expenses';
 
 @Component({
   selector: 'app-settings',
+  standalone: true,
   imports: [CommonModule, ReactiveFormsModule],
   template: `
     <div class="card bg-white dark:bg-gray-800 rounded shadow transition-colors">
@@ -251,10 +252,10 @@ export class SettingsComponent {
   activeTab = signal<Tab>('general');
   editingUser = signal<User | null>(null);
   
-  // Inline edit signals
-  editingCatId = signal<string | null>(null);
-  editingMethodId = signal<string | null>(null);
-  
+  // ✅ FIXED: Changed types to accept string | number | null
+  editingCatId = signal<string | number | null>(null);
+  editingMethodId = signal<string | number | null>(null);
+
   // Delete confirm signal
   userToDelete = signal<string | null>(null);
 
@@ -370,7 +371,7 @@ export class SettingsComponent {
         surname: val.surname || '',
         role: val.role as 'admin' | 'user'
       };
-      
+
       if(val.password) {
         userData.password = val.password;
       }
@@ -384,13 +385,15 @@ export class SettingsComponent {
     if (name.trim()) this.store.addExpenseCategory(name.trim());
   }
 
-  startEditCat(id: string) {
+  // ✅ FIXED: Changed parameter type to accept string | number
+  startEditCat(id: string | number) {
     this.editingCatId.set(id);
   }
 
-  saveCategoryEdit(id: string, newName: string) {
+  // ✅ FIXED: Changed parameter type and convert to number when calling store
+  saveCategoryEdit(id: string | number, newName: string) {
     if (newName.trim()) {
-        this.store.updateExpenseCategory(id, newName.trim());
+        this.store.updateExpenseCategory(+id, newName.trim());  // Convert to number
         this.editingCatId.set(null);
     }
   }
@@ -399,13 +402,15 @@ export class SettingsComponent {
     if (name.trim()) this.store.addExpenseType(name.trim());
   }
 
-  startEditMethod(id: string) {
+  // ✅ FIXED: Changed parameter type to accept string | number
+  startEditMethod(id: string | number) {
     this.editingMethodId.set(id);
   }
 
-  saveMethodEdit(id: string, newName: string) {
+  // ✅ FIXED: Changed parameter type and convert to number when calling store
+  saveMethodEdit(id: string | number, newName: string) {
     if(newName.trim()) {
-        this.store.updateExpenseType(id, newName.trim());
+        this.store.updateExpenseType(+id, newName.trim());  // Convert to number
         this.editingMethodId.set(null);
     }
   }

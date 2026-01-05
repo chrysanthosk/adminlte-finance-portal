@@ -1,11 +1,12 @@
 import { Component, inject, signal, computed, effect, untracked } from '@angular/core';
 import { CommonModule, CurrencyPipe } from '@angular/common';
-import { FormBuilder, ReactiveFormsModule, FormArray, Validators, FormsModule, AbstractControl, FormGroup } from '@angular/forms';
+import { FormBuilder, ReactiveFormsModule, FormArray, Validators, FormsModule } from '@angular/forms';
 import { StoreService, IncomeEntry } from '../../services/store.service';
 import { AuthService } from '../../services/auth.service';
 
 @Component({
   selector: 'app-income',
+  standalone: true,
   imports: [CommonModule, ReactiveFormsModule, CurrencyPipe, FormsModule],
   template: `
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -26,9 +27,6 @@ import { AuthService } from '../../services/auth.service';
               </div>
 
               <div formArrayName="amounts">
-                <!-- 
-                   We track by index to ensure the loop stays in sync with the FormArray indices.
-                -->
                 @for (method of store.incomeMethods(); track $index; let i = $index) {
                   <div [formGroupName]="i" class="mb-3">
                     <label class="block text-gray-600 dark:text-gray-400 text-xs font-semibold mb-1">
@@ -119,9 +117,9 @@ export class IncomeComponent {
 
   // Filter state
   filterMonth = signal(new Date().toISOString().substring(0, 7)); // YYYY-MM
-  
-  // Edit state
-  editingId = signal<string | null>(null);
+
+  // ✅ FIXED: Changed type to accept string | number | null
+  editingId = signal<string | number | null>(null);
 
   incomeForm = this.fb.group({
     date: [new Date().toISOString().split('T')[0], Validators.required],
@@ -137,7 +135,7 @@ export class IncomeComponent {
   });
 
   constructor() {
-    // Initialize form ONCE based on methods. 
+    // Initialize form ONCE based on methods.
     // Effect handles updates if methods config changes, but ignores editing state to prevent wipe.
     effect(() => {
       const methods = this.store.incomeMethods();
@@ -153,23 +151,24 @@ export class IncomeComponent {
     this.filterMonth.set(val);
   }
 
-  // Initializes the FormArray structure. 
+  // Initializes the FormArray structure.
   // Should only be called when not editing, or when config changes.
   initForm() {
     const amountsArray = this.incomeForm.get('amounts') as FormArray;
     amountsArray.clear();
-    
+
     // Create controls for each method, in order.
     this.store.incomeMethods().forEach(m => {
       amountsArray.push(this.fb.group({
-        methodId: [m.id], 
+        methodId: [m.id],
         amount: [0, [Validators.min(0)]]
       }));
     });
   }
 
-  getAmountForMethod(entry: any, methodId: string) {
-    const line = entry.lines.find((l: any) => l.methodId === methodId);
+  // ✅ FIXED: Use String() conversion for safe comparison
+  getAmountForMethod(entry: any, methodId: string | number) {
+    const line = entry.lines.find((l: any) => String(l.methodId) === String(methodId));
     return line ? line.amount : 0;
   }
 
@@ -179,7 +178,7 @@ export class IncomeComponent {
 
   edit(entry: IncomeEntry) {
     this.editingId.set(entry.id);
-    
+
     // 1. Patch header fields
     this.incomeForm.patchValue({
       date: entry.date,
@@ -196,12 +195,13 @@ export class IncomeComponent {
       this.initForm();
     }
 
+    // ✅ FIXED: Use String() conversion for safe comparison
     // Iterate over the STORE methods to ensure we match index-for-index
     methods.forEach((m, index) => {
       // Find the value in the entry
-      const line = entry.lines.find(l => l.methodId === m.id);
+      const line = entry.lines.find(l => String(l.methodId) === String(m.id));
       const val = line ? line.amount : 0;
-      
+
       // Get the existing control at this index
       const control = amountsArray.at(index);
       if (control) {
@@ -227,7 +227,7 @@ export class IncomeComponent {
   onSubmit() {
     if (this.incomeForm.valid) {
       const formVal = this.incomeForm.value;
-      
+
       const lines = (formVal.amounts as any[])
         .filter(a => a.amount >= 0)
         .map(a => ({ methodId: a.methodId, amount: a.amount }));
@@ -238,13 +238,13 @@ export class IncomeComponent {
 
       if (this.editingId()) {
         this.store.updateIncome({
-          id: this.editingId()!,
+          id: String(this.editingId()!),  // ✅ FIXED: Ensure string type
           date: formVal.date!,
           lines: cleanLines,
           notes: formVal.notes || '',
           createdBy: this.auth.currentUser()?.username || 'unknown'
         });
-        this.cancelEdit(); 
+        this.cancelEdit();
       } else {
         this.store.addIncome({
           date: formVal.date!,
@@ -252,7 +252,7 @@ export class IncomeComponent {
           notes: formVal.notes || '',
           createdBy: this.auth.currentUser()?.username || 'unknown'
         });
-        
+
         this.cancelEdit();
       }
     }
