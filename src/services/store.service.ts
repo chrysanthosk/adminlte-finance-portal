@@ -1,11 +1,12 @@
-// src/services/store.service.ts
-import { Injectable, signal, computed, inject } from '@angular/core';
-import { ApiService } from './api.service';
 
-export interface IncomeMethod { id: number; name: string; }
-export interface ExpenseType { id: number; name: string; }
-export interface ExpenseCategory { id: number; name: string; }
-export interface Account { id: number; name: string; type: string; currency: string; active: boolean; }
+import { Injectable, signal, computed, inject } from '@angular/core';
+import { HttpClient } from '@angular/common/http';
+import { firstValueFrom } from 'rxjs';
+
+export interface IncomeMethod { id: string; name: string; }
+export interface ExpenseType { id: string; name: string; }
+export interface ExpenseCategory { id: string; name: string; }
+export interface Account { id: string; name: string; type: string; currency: string; active: boolean; }
 
 export interface User {
   username: string;
@@ -33,20 +34,20 @@ export interface SmtpSettings {
 }
 
 export interface IncomeEntry {
-  id: number | string;
+  id: string;
   date: string;
-  lines: { methodId: number; amount: number }[];
+  lines: { methodId: string; amount: number }[];
   notes: string;
   createdBy: string;
 }
 
 export interface ExpenseEntry {
-  id: number | string;
+  id: string;
   date: string;
   vendor: string;
   amount: number;
-  paymentTypeId: number;
-  categoryId: number;
+  paymentTypeId: string;
+  categoryId: string;
   chequeNo?: string;
   reason?: string;
   attachment?: string;
@@ -54,41 +55,27 @@ export interface ExpenseEntry {
 }
 
 export interface AccountSnapshot {
-  id: number | string;
+  id: string;
   month: string;
-  balances: { accountId: number; balance: number }[];
+  balances: { accountId: string; balance: number }[];
   isLocked: boolean;
 }
 
 @Injectable({ providedIn: 'root' })
 export class StoreService {
-  private api = inject(ApiService);
+  private http: HttpClient = inject(HttpClient);
+  private readonly API_URL = '/api'; // Use relative path for Nginx proxy
 
-  // Settings
-  readonly settings = signal<AppSettings>({
-    companyName: 'AdminLTE Finance'
-  });
+  // Global Settings
+  readonly settings = signal<AppSettings>({ companyName: 'Loading...' });
+  readonly smtpSettings = signal<SmtpSettings | undefined>(undefined);
 
-  readonly smtpSettings = signal<SmtpSettings>({
-    host: 'smtp.example.com',
-    port: 587,
-    user: '',
-    password: '',
-    secure: true,
-    fromName: 'Finance Portal',
-    fromEmail: 'noreply@finance.com'
-  });
-
-  // Users
+  // Data Signals
   readonly users = signal<User[]>([]);
-
-  // Configuration
   readonly incomeMethods = signal<IncomeMethod[]>([]);
   readonly expenseTypes = signal<ExpenseType[]>([]);
   readonly expenseCategories = signal<ExpenseCategory[]>([]);
   readonly accounts = signal<Account[]>([]);
-
-  // Data
   readonly incomeEntries = signal<IncomeEntry[]>([]);
   readonly expenseEntries = signal<ExpenseEntry[]>([]);
   readonly snapshots = signal<AccountSnapshot[]>([]);
@@ -121,233 +108,153 @@ export class StoreService {
     return { income, expenses, profit: income - expenses };
   });
 
-  constructor() {
-    this.loadAllData();
+  // --- Data Loading ---
+  async loadAll() {
+    try {
+      const data: any = await firstValueFrom(this.http.get(`${this.API_URL}/loadAll`));
+      if (data) {
+        this.settings.set(data.settings);
+        this.smtpSettings.set(data.smtpSettings);
+        this.users.set(data.users || []);
+        this.incomeMethods.set(data.incomeMethods || []);
+        this.expenseTypes.set(data.expenseTypes || []);
+        this.expenseCategories.set(data.expenseCategories || []);
+        this.accounts.set(data.accounts || []);
+        this.incomeEntries.set(data.incomeEntries || []);
+        this.expenseEntries.set(data.expenseEntries || []);
+        this.snapshots.set(data.snapshots || []);
+      }
+    } catch (e) {
+      console.error('API call failed. Could not load data.', e);
+      alert('Could not connect to the server. Please check your connection and try again.');
+    }
   }
 
-  // ==================== LOAD ALL DATA ====================
-  loadAllData() {
-    this.loadSettings();
-    this.loadUsers();
-    this.loadIncomeMethods();
-    this.loadExpenseTypes();
-    this.loadExpenseCategories();
-    this.loadAccounts();
-    this.loadIncomeEntries();
-    this.loadExpenseEntries();
-    this.loadSnapshots();
-  }
-
-  // ==================== SETTINGS ====================
-  loadSettings() {
-    this.api.getSettings().subscribe({
-      next: (data) => {
-        this.settings.set({ companyName: data.companyName });
-        if (data.smtpSettings) {
-          this.smtpSettings.set(data.smtpSettings);
-        }
-      },
-      error: (error) => console.error('Failed to load settings:', error)
-    });
-  }
-
-  updateSettings(newSettings: AppSettings) {
+  // --- Settings ---
+  async updateSettings(newSettings: AppSettings) {
+    await this.post('updateSettings', newSettings);
     this.settings.set(newSettings);
-    this.api.updateSettings({ companyName: newSettings.companyName }).subscribe({
-      error: (error) => console.error('Failed to update settings:', error)
-    });
   }
 
-  updateSmtpSettings(settings: SmtpSettings) {
+  async updateSmtpSettings(settings: SmtpSettings) {
+    await this.post('updateSmtp', settings);
     this.smtpSettings.set(settings);
-    this.api.updateSettings({ smtpSettings: settings }).subscribe({
-      error: (error) => console.error('Failed to update SMTP settings:', error)
+  }
+
+  // --- Users ---
+  async addUser(user: User) {
+    await this.post('addUser', user);
+    this.users.update(u => {
+        const idx = u.findIndex(x => x.username === user.username);
+        if(idx >= 0) {
+            const arr = [...u];
+            arr[idx] = { ...arr[idx], ...user };
+            return arr;
+        }
+        return [...u, user];
     });
   }
 
-  // ==================== USERS ====================
-  loadUsers() {
-    this.api.getUsers().subscribe({
-      next: (users) => this.users.set(users),
-      error: (error) => console.error('Failed to load users:', error)
-    });
+  async updateUser(user: User) {
+    await this.post('updateUser', user);
+    this.users.update(users => users.map(u => u.username === user.username ? user : u));
   }
 
-  addUser(user: User) {
-    this.api.createUser(user).subscribe({
-      next: () => this.loadUsers(),
-      error: (error) => console.error('Failed to add user:', error)
-    });
+  async removeUser(username: string) {
+    await this.post('removeUser', { username });
+    this.users.update(u => u.filter(user => user.username !== username));
   }
 
-  updateUser(user: User) {
-    this.api.updateUser(user).subscribe({
-      next: () => this.loadUsers(),
-      error: (error) => console.error('Failed to update user:', error)
-    });
+  // --- Categories/Types ---
+  async addIncomeMethod(name: string) {
+    const res: any = await this.post('addIncomeMethod', { name });
+    this.incomeMethods.update(c => [...c, res]);
   }
 
-  removeUser(username: string) {
-    this.api.deleteUser(username).subscribe({
-      next: () => this.loadUsers(),
-      error: (error) => console.error('Failed to delete user:', error)
-    });
+  async updateIncomeMethod(id: string, name: string) {
+    await this.post('updateIncomeMethod', { id, name });
+    this.incomeMethods.update(c => c.map(cat => cat.id === id ? { ...cat, name } : cat));
   }
 
-  // ==================== INCOME METHODS ====================
-  loadIncomeMethods() {
-    this.api.getIncomeMethods().subscribe({
-      next: (methods) => this.incomeMethods.set(methods),
-      error: (error) => console.error('Failed to load income methods:', error)
-    });
+  async removeIncomeMethod(id: string) {
+    await this.post('removeIncomeMethod', { id });
+    this.incomeMethods.update(c => c.filter(x => x.id !== id));
   }
 
-  // ==================== EXPENSE TYPES ====================
-  loadExpenseTypes() {
-    this.api.getExpenseTypes().subscribe({
-      next: (types) => this.expenseTypes.set(types),
-      error: (error) => console.error('Failed to load expense types:', error)
-    });
+  async addExpenseCategory(name: string) {
+    const res: any = await this.post('addCategory', { name });
+    this.expenseCategories.update(c => [...c, res]);
   }
 
-  addExpenseType(name: string) {
-    this.api.createExpenseType({ name }).subscribe({
-      next: () => this.loadExpenseTypes(),
-      error: (error) => console.error('Failed to add expense type:', error)
-    });
+  async updateExpenseCategory(id: string, name: string) {
+    await this.post('updateCategory', { id, name });
+    this.expenseCategories.update(c => c.map(cat => cat.id === id ? { ...cat, name } : cat));
   }
 
-  updateExpenseType(id: number, name: string) {
-    this.api.updateExpenseType({ id, name }).subscribe({
-      next: () => this.loadExpenseTypes(),
-      error: (error) => console.error('Failed to update expense type:', error)
-    });
+  async removeExpenseCategory(id: string) {
+    await this.post('removeCategory', { id });
+    this.expenseCategories.update(c => c.filter(x => x.id !== id));
   }
 
-  removeExpenseType(id: number) {
-    this.api.deleteExpenseType(id).subscribe({
-      next: () => this.loadExpenseTypes(),
-      error: (error) => console.error('Failed to delete expense type:', error)
-    });
+  async addExpenseType(name: string) {
+    const res: any = await this.post('addType', { name });
+    this.expenseTypes.update(t => [...t, res]);
   }
 
-  // ==================== EXPENSE CATEGORIES ====================
-  loadExpenseCategories() {
-    this.api.getExpenseCategories().subscribe({
-      next: (categories) => this.expenseCategories.set(categories),
-      error: (error) => console.error('Failed to load expense categories:', error)
-    });
+  async updateExpenseType(id: string, name: string) {
+    await this.post('updateType', { id, name });
+    this.expenseTypes.update(t => t.map(type => type.id === id ? { ...type, name } : type));
   }
 
-  addExpenseCategory(name: string) {
-    this.api.createExpenseCategory({ name }).subscribe({
-      next: () => this.loadExpenseCategories(),
-      error: (error) => console.error('Failed to add expense category:', error)
-    });
+  async removeExpenseType(id: string) {
+    await this.post('removeType', { id });
+    this.expenseTypes.update(t => t.filter(x => x.id !== id));
   }
 
-  updateExpenseCategory(id: number, name: string) {
-    this.api.updateExpenseCategory({ id, name }).subscribe({
-      next: () => this.loadExpenseCategories(),
-      error: (error) => console.error('Failed to update expense category:', error)
-    });
+  // --- Income ---
+  async addIncome(entry: Omit<IncomeEntry, 'id'>) {
+    const res: any = await this.post('addIncome', entry);
+    this.incomeEntries.update(v => [res, ...v]);
   }
 
-  removeExpenseCategory(id: number) {
-    this.api.deleteExpenseCategory(id).subscribe({
-      next: () => this.loadExpenseCategories(),
-      error: (error) => console.error('Failed to delete expense category:', error)
-    });
+  async updateIncome(entry: IncomeEntry) {
+    await this.post('updateIncome', entry);
+    this.incomeEntries.update(v => v.map(e => e.id === entry.id ? entry : e));
   }
 
-  // ==================== ACCOUNTS ====================
-  loadAccounts() {
-    this.api.getAccounts().subscribe({
-      next: (accounts) => this.accounts.set(accounts),
-      error: (error) => console.error('Failed to load accounts:', error)
-    });
+  // --- Expenses ---
+  async addExpense(entry: Omit<ExpenseEntry, 'id'>) {
+    const res: any = await this.post('addExpense', entry);
+    this.expenseEntries.update(v => [res, ...v]);
   }
 
-  addAccount(account: Omit<Account, 'id'>) {
-    this.api.createAccount(account).subscribe({
-      next: () => this.loadAccounts(),
-      error: (error) => console.error('Failed to add account:', error)
-    });
+  async updateExpense(entry: ExpenseEntry) {
+    await this.post('updateExpense', entry);
+    this.expenseEntries.update(v => v.map(e => e.id === entry.id ? entry : e));
   }
 
-  updateAccount(account: Account) {
-    this.api.updateAccount(account).subscribe({
-      next: () => this.loadAccounts(),
-      error: (error) => console.error('Failed to update account:', error)
-    });
+  async removeExpense(id: string) {
+    await this.post('removeExpense', { id });
+    this.expenseEntries.update(v => v.filter(e => e.id !== id));
   }
 
-  // ==================== INCOME ENTRIES ====================
-  loadIncomeEntries() {
-    this.api.getIncome().subscribe({
-      next: (entries) => this.incomeEntries.set(entries),
-      error: (error) => console.error('Failed to load income:', error)
-    });
+  // --- Accounts ---
+  async addSnapshot(snapshot: Omit<AccountSnapshot, 'id'>) {
+    const res: any = await this.post('addSnapshot', snapshot);
+    this.snapshots.update(v => [...v.filter(s => s.month !== snapshot.month), res]);
   }
 
-  addIncome(entry: Omit<IncomeEntry, 'id'>) {
-    this.api.createIncome(entry).subscribe({
-      next: () => this.loadIncomeEntries(),
-      error: (error) => console.error('Failed to add income:', error)
-    });
+  async addAccount(account: Omit<Account, 'id'>) {
+    const res: any = await this.post('addAccount', account);
+    this.accounts.update(v => [...v, res]);
   }
 
-  updateIncome(entry: IncomeEntry) {
-    this.api.updateIncome(entry).subscribe({
-      next: () => this.loadIncomeEntries(),
-      error: (error) => console.error('Failed to update income:', error)
-    });
+  async updateAccount(account: Account) {
+    await this.post('updateAccount', account);
+    this.accounts.update(v => v.map(a => a.id === account.id ? account : a));
   }
 
-  // ==================== EXPENSE ENTRIES ====================
-  loadExpenseEntries() {
-    this.api.getExpenses().subscribe({
-      next: (entries) => this.expenseEntries.set(entries),
-      error: (error) => console.error('Failed to load expenses:', error)
-    });
-  }
-
-  addExpense(entry: Omit<ExpenseEntry, 'id'>) {
-    this.api.createExpense(entry).subscribe({
-      next: () => this.loadExpenseEntries(),
-      error: (error) => console.error('Failed to add expense:', error)
-    });
-  }
-
-  updateExpense(entry: ExpenseEntry) {
-    this.api.updateExpense(entry).subscribe({
-      next: () => this.loadExpenseEntries(),
-      error: (error) => console.error('Failed to update expense:', error)
-    });
-  }
-
-  removeExpense(id: number | string) {
-    this.api.deleteExpense(Number(id)).subscribe({
-      next: () => this.loadExpenseEntries(),
-      error: (error) => console.error('Failed to delete expense:', error)
-    });
-  }
-
-  // ==================== SNAPSHOTS ====================
-  loadSnapshots() {
-    this.api.getSnapshots().subscribe({
-      next: (snapshots) => this.snapshots.set(snapshots),
-      error: (error) => console.error('Failed to load snapshots:', error)
-    });
-  }
-
-  addSnapshot(snapshot: Omit<AccountSnapshot, 'id'>) {
-    this.api.createSnapshot(snapshot).subscribe({
-      next: () => {
-        this.loadSnapshots();
-        alert('Snapshot saved successfully!');
-      },
-      error: (error) => console.error('Failed to add snapshot:', error)
-    });
+  private post(action: string, body: any) {
+    return firstValueFrom(this.http.post(`${this.API_URL}/${action}`, body));
   }
 }

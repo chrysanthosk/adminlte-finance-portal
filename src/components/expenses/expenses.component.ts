@@ -6,7 +6,6 @@ import { AuthService } from '../../services/auth.service';
 
 @Component({
   selector: 'app-expenses',
-  standalone: true,
   imports: [CommonModule, ReactiveFormsModule, CurrencyPipe, FormsModule],
   template: `
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -169,9 +168,9 @@ export class ExpensesComponent {
   // Filter
   filterMonth = signal(new Date().toISOString().substring(0, 7));
   
-  // Edit & UI State - ✅ FIXED: Changed type to accept string | number | null
-  editingId = signal<string | number | null>(null);
-  deleteConfirmation = signal<string | number | null>(null);
+  // Edit & UI State
+  editingId = signal<string | null>(null);
+  deleteConfirmation = signal<string | null>(null); // Track which row is confirming deletion
 
   currentAttachment = '';
   newAttachment = '';
@@ -193,14 +192,8 @@ export class ExpensesComponent {
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
   });
 
-  // ✅ FIXED: Accept string | number and use +id for comparison
-  getCategoryName(id: string | number) {
-    return this.store.expenseCategories().find(c => c.id === +id)?.name || String(id);
-  }
-
-  getTypeName(id: string | number) {
-    return this.store.expenseTypes().find(t => t.id === +id)?.name || String(id);
-  }
+  getCategoryName(id: string) { return this.store.expenseCategories().find(c => c.id === id)?.name || id; }
+  getTypeName(id: string) { return this.store.expenseTypes().find(t => t.id === id)?.name || id; }
 
   setFilterMonth(val: string) {
     this.filterMonth.set(val);
@@ -208,7 +201,7 @@ export class ExpensesComponent {
 
   isCheque() {
     const typeId = this.expenseForm.get('paymentTypeId')?.value;
-    const type = this.store.expenseTypes().find(t => String(t.id) === String(typeId));
+    const type = this.store.expenseTypes().find(t => t.id === typeId);
     return type?.name.toLowerCase() === 'cheque';
   }
 
@@ -224,11 +217,11 @@ export class ExpensesComponent {
   }
 
   edit(entry: ExpenseEntry) {
-    this.deleteConfirmation.set(null);
+    this.deleteConfirmation.set(null); // Clear any pending delete
     this.editingId.set(entry.id);
     this.currentAttachment = entry.attachment || '';
-    this.newAttachment = '';
-
+    this.newAttachment = ''; // reset new
+    
     this.expenseForm.patchValue({
       vendor: entry.vendor,
       date: entry.date,
@@ -242,6 +235,7 @@ export class ExpensesComponent {
 
   performDelete(entry: ExpenseEntry) {
     this.store.removeExpense(entry.id);
+    // If we were editing this entry, cancel the edit
     if (this.editingId() === entry.id) {
         this.cancelEdit();
     }
@@ -270,27 +264,27 @@ export class ExpensesComponent {
       const val = this.expenseForm.value;
       const attachmentToSave = this.newAttachment || this.currentAttachment;
 
-      // ✅ FIXED: Convert categoryId and paymentTypeId to numbers using +
       const entryData = {
         date: val.date!,
         vendor: val.vendor!,
         amount: val.amount!,
-        categoryId: +val.categoryId!,  // Convert to number
-        paymentTypeId: +val.paymentTypeId!,  // Convert to number
-        chequeNo: val.chequeNo || '',
-        reason: val.reason || '',
-        attachment: attachmentToSave || '',
+        categoryId: val.categoryId!,
+        paymentTypeId: val.paymentTypeId!,
+        chequeNo: val.chequeNo || undefined,
+        reason: val.reason || undefined,
+        attachment: attachmentToSave || undefined,
         createdBy: this.auth.currentUser()?.username || 'unknown'
       };
 
       if (this.editingId()) {
         this.store.updateExpense({
           ...entryData,
-          id: String(this.editingId()!)  // Ensure id is string for consistency
+          id: this.editingId()!
         });
         this.cancelEdit();
       } else {
         this.store.addExpense(entryData);
+        // Reset only some fields
         this.expenseForm.patchValue({
           vendor: '',
           amount: 0,
@@ -299,6 +293,7 @@ export class ExpensesComponent {
         });
         this.newAttachment = '';
         this.currentAttachment = '';
+        // Date stays same, cats stay same
       }
     }
   }

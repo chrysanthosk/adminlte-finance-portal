@@ -3,11 +3,10 @@ import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { StoreService, User } from '../../services/store.service';
 
-type Tab = 'general' | 'users' | 'email' | 'expenses';
+type Tab = 'general' | 'users' | 'email' | 'config';
 
 @Component({
   selector: 'app-settings',
-  standalone: true,
   imports: [CommonModule, ReactiveFormsModule],
   template: `
     <div class="card bg-white dark:bg-gray-800 rounded shadow transition-colors">
@@ -29,8 +28,8 @@ type Tab = 'general' | 'users' | 'email' | 'expenses';
             </button>
           </li>
           <li class="mr-2">
-            <button (click)="activeTab.set('expenses')" [class.text-blue-600]="activeTab() === 'expenses'" [class.border-blue-600]="activeTab() === 'expenses'" class="inline-block p-4 rounded-t-lg hover:text-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 dark:hover:text-gray-300 border-b-2 border-transparent">
-              Expense Config
+            <button (click)="activeTab.set('config')" [class.text-blue-600]="activeTab() === 'config'" [class.border-blue-600]="activeTab() === 'config'" class="inline-block p-4 rounded-t-lg hover:text-gray-600 hover:bg-gray-50 dark:hover:bg-gray-800 dark:hover:text-gray-300 border-b-2 border-transparent">
+              Transaction Config
             </button>
           </li>
         </ul>
@@ -165,7 +164,7 @@ type Tab = 'general' | 'users' | 'email' | 'expenses';
               </div>
               <div class="mb-3">
                 <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Password</label>
-                <input type="password" formControlName="password" class="w-full rounded border dark:border-gray-600 px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                <input type="password" formControlName="password" class="w-full rounded border dark:border-gray-600 px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white" placeholder="Unchanged if blank">
               </div>
               <div class="mb-4 flex items-center">
                  <input type="checkbox" formControlName="secure" class="w-4 h-4 text-blue-600 bg-gray-100 border-gray-300 rounded focus:ring-blue-500 dark:focus:ring-blue-600 dark:ring-offset-gray-800 focus:ring-2 dark:bg-gray-700 dark:border-gray-600">
@@ -176,10 +175,38 @@ type Tab = 'general' | 'users' | 'email' | 'expenses';
            </div>
         }
 
-        <!-- Expenses Config Tab -->
-        @if(activeTab() === 'expenses') {
-          <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
-            <!-- Categories -->
+        <!-- Transaction Config Tab -->
+        @if(activeTab() === 'config') {
+          <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
+            <!-- Income Methods -->
+            <div>
+              <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Income Methods</h3>
+              <div class="flex gap-2 mb-4">
+                <input #newIncomeMethod type="text" placeholder="New Method" class="flex-1 rounded border dark:border-gray-600 px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                <button (click)="addIncomeMethod(newIncomeMethod.value); newIncomeMethod.value=''" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Add</button>
+              </div>
+              <ul class="bg-gray-50 dark:bg-gray-700 rounded p-4 space-y-2">
+                @for(method of store.incomeMethods(); track method.id) {
+                  <li class="flex justify-between items-center text-sm">
+                    @if(editingIncomeMethodId() === method.id) {
+                        <div class="flex gap-2 flex-1">
+                            <input #editIncomeMethodInput type="text" [value]="method.name" class="flex-1 rounded border dark:border-gray-600 px-2 py-1 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
+                            <button (click)="saveIncomeMethodEdit(method.id, editIncomeMethodInput.value)" class="text-green-600 hover:text-green-800">Save</button>
+                            <button (click)="editingIncomeMethodId.set(null)" class="text-gray-500 hover:text-gray-700">Cancel</button>
+                        </div>
+                    } @else {
+                        <span class="text-gray-900 dark:text-white">{{ method.name }}</span>
+                        <div class="flex gap-2">
+                           <button (click)="startEditIncomeMethod(method.id)" class="text-blue-500 hover:text-blue-700">Edit</button>
+                           <button (click)="store.removeIncomeMethod(method.id)" class="text-red-500 hover:text-red-700">×</button>
+                        </div>
+                    }
+                  </li>
+                }
+              </ul>
+            </div>
+            
+            <!-- Expense Categories -->
             <div>
               <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Expense Categories</h3>
               <div class="flex gap-2 mb-4">
@@ -210,9 +237,9 @@ type Tab = 'general' | 'users' | 'email' | 'expenses';
               </ul>
             </div>
 
-            <!-- Payment Methods (Types) -->
+            <!-- Expense Payment Methods (Types) -->
             <div>
-              <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Payment Methods</h3>
+              <h3 class="text-lg font-medium text-gray-900 dark:text-white mb-4">Expense Payment Methods</h3>
               <div class="flex gap-2 mb-4">
                 <input #newMethod type="text" placeholder="New Method" class="flex-1 rounded border dark:border-gray-600 px-3 py-2 bg-white dark:bg-gray-700 text-gray-900 dark:text-white">
                 <button (click)="addMethod(newMethod.value); newMethod.value=''" class="bg-indigo-600 text-white px-4 py-2 rounded hover:bg-indigo-700">Add</button>
@@ -244,7 +271,12 @@ type Tab = 'general' | 'users' | 'email' | 'expenses';
 
       </div>
     </div>
-  `
+  `,
+  styles: [`
+    .card-header button.border-blue-600 {
+        border-bottom-width: 2px !important;
+    }
+  `]
 })
 export class SettingsComponent {
   store = inject(StoreService);
@@ -252,10 +284,11 @@ export class SettingsComponent {
   activeTab = signal<Tab>('general');
   editingUser = signal<User | null>(null);
   
-  // ✅ FIXED: Changed types to accept string | number | null
-  editingCatId = signal<string | number | null>(null);
-  editingMethodId = signal<string | number | null>(null);
-
+  // Inline edit signals
+  editingCatId = signal<string | null>(null);
+  editingMethodId = signal<string | null>(null);
+  editingIncomeMethodId = signal<string | null>(null);
+  
   // Delete confirm signal
   userToDelete = signal<string | null>(null);
 
@@ -277,8 +310,8 @@ export class SettingsComponent {
   });
 
   smtpForm = this.fb.group({
-    host: ['', Validators.required],
-    port: [587, Validators.required],
+    host: [''],
+    port: [587],
     user: [''],
     password: [''],
     secure: [true],
@@ -332,7 +365,6 @@ export class SettingsComponent {
     this.passwordStrengthLabel.set('Empty');
   }
 
-  // Renamed to performDeleteUser to distinguish from trigger
   performDeleteUser(username: string) {
     this.store.removeUser(username);
     this.userToDelete.set(null);
@@ -369,9 +401,11 @@ export class SettingsComponent {
         email: val.email!,
         name: val.name || '',
         surname: val.surname || '',
-        role: val.role as 'admin' | 'user'
+        role: val.role as 'admin' | 'user',
+        twoFactorEnabled: this.editingUser()?.twoFactorEnabled || false,
+        twoFactorSecret: this.editingUser()?.twoFactorSecret || undefined
       };
-
+      
       if(val.password) {
         userData.password = val.password;
       }
@@ -381,36 +415,44 @@ export class SettingsComponent {
     }
   }
 
+  // Income Methods
+  addIncomeMethod(name: string) {
+    if (name.trim()) this.store.addIncomeMethod(name.trim());
+  }
+  startEditIncomeMethod(id: string) {
+    this.editingIncomeMethodId.set(id);
+  }
+  saveIncomeMethodEdit(id: string, newName: string) {
+    if (newName.trim()) {
+      this.store.updateIncomeMethod(id, newName.trim());
+      this.editingIncomeMethodId.set(null);
+    }
+  }
+
+  // Expense Categories
   addCategory(name: string) {
     if (name.trim()) this.store.addExpenseCategory(name.trim());
   }
-
-  // ✅ FIXED: Changed parameter type to accept string | number
-  startEditCat(id: string | number) {
+  startEditCat(id: string) {
     this.editingCatId.set(id);
   }
-
-  // ✅ FIXED: Changed parameter type and convert to number when calling store
-  saveCategoryEdit(id: string | number, newName: string) {
+  saveCategoryEdit(id: string, newName: string) {
     if (newName.trim()) {
-        this.store.updateExpenseCategory(+id, newName.trim());  // Convert to number
+        this.store.updateExpenseCategory(id, newName.trim());
         this.editingCatId.set(null);
     }
   }
 
+  // Expense Types
   addMethod(name: string) {
     if (name.trim()) this.store.addExpenseType(name.trim());
   }
-
-  // ✅ FIXED: Changed parameter type to accept string | number
-  startEditMethod(id: string | number) {
+  startEditMethod(id: string) {
     this.editingMethodId.set(id);
   }
-
-  // ✅ FIXED: Changed parameter type and convert to number when calling store
-  saveMethodEdit(id: string | number, newName: string) {
+  saveMethodEdit(id: string, newName: string) {
     if(newName.trim()) {
-        this.store.updateExpenseType(+id, newName.trim());  // Convert to number
+        this.store.updateExpenseType(id, newName.trim());
         this.editingMethodId.set(null);
     }
   }

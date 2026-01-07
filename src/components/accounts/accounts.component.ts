@@ -4,7 +4,6 @@ import { FormBuilder, ReactiveFormsModule, FormArray, Validators } from '@angula
 import { StoreService, Account } from '../../services/store.service';
 
 @Component({
-    standalone: true,
   selector: 'app-accounts',
   imports: [CommonModule, ReactiveFormsModule, CurrencyPipe],
   template: `

@@ -1,79 +1,46 @@
-// src/services/auth.service.ts
+
 import { Injectable, signal, inject } from '@angular/core';
 import { Router } from '@angular/router';
-import { ApiService } from './api.service';
-import { User } from './store.service';
+import { HttpClient } from '@angular/common/http';
+import { StoreService, User } from './store.service';
+import { firstValueFrom } from 'rxjs';
 
 @Injectable({ providedIn: 'root' })
 export class AuthService {
-  private api = inject(ApiService);
+  private store = inject(StoreService);
   private router = inject(Router) as Router;
+  private http: HttpClient = inject(HttpClient);
   
   currentUser = signal<User | null>(null);
 
-  constructor() {
-    // Try to restore session from localStorage
-    const stored = localStorage.getItem('currentUser');
-    if (stored) {
-      try {
-        this.currentUser.set(JSON.parse(stored));
-      } catch (e) {
-        console.error('Failed to restore user session', e);
+  // Checks credentials via API
+  async validateCredentials(username: string, password: string): Promise<User | null> {
+    try {
+      const response: any = await firstValueFrom(this.http.post('/api/login', { username, password }));
+      if (response && response.success) {
+        return response.user;
       }
+      return null;
+    } catch (e) {
+      console.error('Login API call failed', e);
+      throw e;
     }
   }
 
-  // Validates credentials via API
-  validateCredentials(username: string, password: string): Promise<User | null> {
-    return new Promise((resolve) => {
-      this.api.login(username, password).subscribe({
-        next: (response) => {
-          if (response.success && response.user) {
-            resolve(response.user);
-          } else {
-            resolve(null);
-          }
-        },
-        error: (error) => {
-          console.error('Login error:', error);
-          resolve(null);
-        }
-      });
-    });
-  }
-
-  // Finalizes login and saves session
+  // Finalizes login
   completeLogin(user: User) {
-    this.currentUser.set(user);
-    localStorage.setItem('currentUser', JSON.stringify(user));
-    this.router.navigate(['/']);
+      this.currentUser.set(user);
+      this.store.loadAll(); // Reload data for the logged in user context
+      this.router.navigate(['/']);
   }
 
-  // Old method for compatibility
-  async login(username: string, password: string): Promise<boolean> {
-    const user = await this.validateCredentials(username, password);
-    if (user && !user.twoFactorEnabled) {
-      this.completeLogin(user);
-      return true;
-    }
-    return false;
-  }
-
-  // Update current user (for profile changes)
-  updateCurrentUser(user: User) {
+  async updateCurrentUser(user: User) {
+    await this.store.updateUser(user);
     this.currentUser.set(user);
-    localStorage.setItem('currentUser', JSON.stringify(user));
-    
-    // Also update in backend
-    this.api.updateUser(user).subscribe({
-      next: () => console.log('User updated in database'),
-      error: (error) => console.error('Failed to update user:', error)
-    });
   }
 
   logout() {
     this.currentUser.set(null);
-    localStorage.removeItem('currentUser');
     this.router.navigate(['/login']);
   }
 

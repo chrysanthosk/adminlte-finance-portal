@@ -5,7 +5,6 @@ import { AuthService } from '../../services/auth.service';
 
 @Component({
   selector: 'app-profile',
-  standalone: true,
   imports: [CommonModule, ReactiveFormsModule, FormsModule],
   template: `
     <div class="max-w-2xl mx-auto">

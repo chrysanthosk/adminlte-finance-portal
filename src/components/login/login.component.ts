@@ -4,7 +4,6 @@ import { AuthService } from '../../services/auth.service';
 import { CommonModule } from '@angular/common';
 
 @Component({
-  standalone: true,
   selector: 'app-login',
   imports: [ReactiveFormsModule, CommonModule, FormsModule],
   template: `
@@ -59,8 +58,8 @@ import { CommonModule } from '@angular/common';
                   }
 
                   <div class="mb-4">
-                    <button type="submit" [disabled]="loginForm.invalid" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition duration-150 disabled:opacity-50">
-                      Sign In
+                    <button type="submit" [disabled]="loginForm.invalid || isLoading()" class="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-2 px-4 rounded transition duration-150 disabled:opacity-50">
+                      {{ isLoading() ? 'Signing in...' : 'Sign In' }}
                     </button>
                   </div>
                 </form>
@@ -128,6 +127,7 @@ export class LoginComponent {
   step = signal<'login' | '2fa' | 'forgot'>('login');
   error = signal<string>('');
   message = signal<string>('');
+  isLoading = signal(false);
   
   // Pending user for 2FA
   pendingUser: any = null;
@@ -154,30 +154,37 @@ export class LoginComponent {
       document.documentElement.classList.remove('dark');
     }
   }
-   async onLoginSubmit() {
+
+  async onLoginSubmit() {
     if (this.loginForm.valid) {
       this.error.set('');
+      this.isLoading.set(true);
       const { username, password } = this.loginForm.value;
       
-      // Use validateCredentials instead of direct login to handle 2FA flow
-      const user = await this.auth.validateCredentials(username!, password!);
-      
-      if (user) {
-         if (user.twoFactorEnabled) {
-             this.pendingUser = user;
-             this.step.set('2fa');
-         } else {
-             // Direct login
-             this.auth.completeLogin(user);
-         }
-      } else {
-        this.error.set('Invalid credentials');
+      try {
+        const user = await this.auth.validateCredentials(username!, password!);
+        
+        if (user) {
+           if (user.twoFactorEnabled) {
+               this.pendingUser = user;
+               this.step.set('2fa');
+           } else {
+               this.auth.completeLogin(user);
+           }
+        } else {
+          this.error.set('Invalid credentials');
+        }
+      } catch(e) {
+         this.error.set('Connection error');
+      } finally {
+         this.isLoading.set(false);
       }
     }
   }
-    verify2FA() {
-      // In a real app, verify TOTP here. For simulation, any 6 digit code works
+
+  verify2FA() {
       if(this.twoFactorCode.length === 6 && /^\d+$/.test(this.twoFactorCode)) {
+          // Ideally verify this code with backend too
           this.auth.completeLogin(this.pendingUser);
       } else {
           this.error.set('Invalid authentication code.');
@@ -186,7 +193,6 @@ export class LoginComponent {
 
   onForgotSubmit() {
       if(this.forgotForm.valid) {
-          // Simulation
           this.message.set(`If an account exists for ${this.forgotForm.value.email}, a reset link has been sent.`);
       }
   }

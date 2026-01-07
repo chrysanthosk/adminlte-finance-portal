@@ -1,3 +1,4 @@
+
 {
   "extends": "./tsconfig.json",
   "compilerOptions": {
@@ -5,9 +6,9 @@
     "types": []
   },
   "files": [
-    "src/main.ts"
+    "index.tsx"
   ],
   "include": [
-    "src/**/*.d.ts"
+    "src/**/*.ts"
   ]
 }
