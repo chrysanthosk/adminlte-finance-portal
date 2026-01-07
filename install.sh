@@ -107,13 +107,13 @@ if [ -z "$DB_PASS" ]; then
     print_error "Password cannot be empty."
 fi
 
-sudo -u postgres -i psql -c "CREATE DATABASE $DB_NAME;" &>/dev/null || print_info "Database '$DB_NAME' already exists."
-sudo -u postgres -i psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" &>/dev/null || print_info "User '$DB_USER' already exists. Setting password."
-sudo -u postgres -i psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
-sudo -u postgres -i psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;" &>/dev/null || print_info "Database '$DB_NAME' already exists."
+sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" &>/dev/null || print_info "User '$DB_USER' already exists. Setting password."
+sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
+sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
 
 print_info "Populating database schema from db_setup.txt..."
-cat "$APP_DIR/db_setup.txt" | sudo -u postgres -i psql -d $DB_NAME
+cat "$APP_DIR/db_setup.txt" | sudo -u postgres psql -v ON_ERROR_STOP=1 -d $DB_NAME
 print_success "Database setup is complete."
 
 # 4. Backend Configuration
@@ -136,6 +136,14 @@ print_info "Installing frontend build tools and building the app..."
 npm install
 npm run build
 print_success "Frontend built successfully into '$APP_DIR/dist'."
+
+print_info "Setting permissions for Nginx..."
+if [[ "$OS" == "ubuntu" || "$OS" == "debian" ]]; then
+    chown -R www-data:www-data "$APP_DIR/dist"
+else
+    chown -R nginx:nginx "$APP_DIR/dist"
+fi
+print_success "Web directory permissions set."
 
 # 6. Nginx, Domain, and SSL Configuration
 print_info "Configuring Nginx reverse proxy, domain, and SSL..."
@@ -343,4 +351,3 @@ echo "Management commands:"
 echo "  - To view API logs: \e[1;36mpm2 logs finance-api\e[0m"
 echo "  - To stop the API: \e[1;36mpm2 stop finance-api\e[0m"
 echo "  - To restart the API: \e[1;36mpm2 restart finance-api\e[0m"
-echo

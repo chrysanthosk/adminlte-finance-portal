@@ -1,5 +1,5 @@
 
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, effect } from '@angular/core';
 import { CommonModule, CurrencyPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, FormArray, Validators } from '@angular/forms';
 import { StoreService, Account } from '../../services/store.service';
@@ -155,11 +155,21 @@ export class AccountsComponent {
   });
 
   constructor() {
-    this.store.accounts().forEach(acc => {
-      (this.snapshotForm.get('balances') as FormArray).push(this.fb.group({
-        accountId: [acc.id],
-        balance: [0, Validators.required]
-      }));
+    effect(() => {
+      const accounts = this.store.accounts();
+      const balancesArray = this.snapshotForm.get('balances') as FormArray;
+
+      // This logic ensures the form is only rebuilt when the number of accounts changes,
+      // preventing data loss from user input if other signals cause the effect to re-run.
+      if (balancesArray.length !== accounts.length) {
+        balancesArray.clear();
+        accounts.forEach(acc => {
+          balancesArray.push(this.fb.group({
+            accountId: [acc.id],
+            balance: [0, Validators.required]
+          }));
+        });
+      }
     });
   }
 

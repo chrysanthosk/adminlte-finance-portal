@@ -144,21 +144,17 @@ export class StoreService {
 
   // --- Users ---
   async addUser(user: User) {
-    await this.post('addUser', user);
-    this.users.update((u: User[]) => {
-        const idx = u.findIndex((x: User) => x.username === user.username);
-        if(idx >= 0) {
-            const arr = [...u];
-            arr[idx] = { ...arr[idx], ...user };
-            return arr;
-        }
-        return [...u, user];
-    });
+    const newUser = await this.post('addUser', user) as User;
+    if (newUser) {
+      // API now returns the created user, so we can add it accurately.
+      this.users.update((u: User[]) => [...u, newUser]);
+    }
   }
 
   async updateUser(user: User) {
     await this.post('updateUser', user);
-    this.users.update((users: User[]) => users.map((u: User) => u.username === user.username ? user : u));
+    // Password is not returned, so merge carefully.
+    this.users.update((users: User[]) => users.map((u: User) => u.username === user.username ? { ...u, ...user, password: u.password } : u));
   }
 
   async removeUser(username: string) {

@@ -110,20 +110,29 @@ app.post('/api/:action', async (req, res) => {
         switch (action) {
             case 'addUser': {
                 const { username, password, email, name, surname, role } = body;
+                if (!password) {
+                    return res.status(400).json({ success: false, message: 'Password is required for a new user.' });
+                }
                 const hashedPassword = await bcrypt.hash(password, 10);
-                const query = `
-                    INSERT INTO users (username, password, email, name, surname, role) 
-                    VALUES ($1, $2, $3, $4, $5, $6)
-                    ON CONFLICT (username) DO UPDATE SET
-                    email = $3, name = $4, surname = $5, role = $6
-                    RETURNING *;
-                `;
-                await pool.query(query, [username, hashedPassword, email, name, surname, role]);
-                break;
+                try {
+                    const query = `
+                        INSERT INTO users (username, password, email, name, surname, role) 
+                        VALUES ($1, $2, $3, $4, $5, $6)
+                        RETURNING username, name, surname, email, role, two_factor_enabled, two_factor_secret;
+                    `;
+                    const result = await pool.query(query, [username, hashedPassword, email, name, surname, role]);
+                    return res.json(convertKeysToCamel(result.rows[0]));
+                } catch (err) {
+                    if (err.code === '23505') { // unique_violation
+                        return res.status(409).json({ success: false, message: 'Username or email already exists.' });
+                    }
+                    // Re-throw for the main error handler
+                    throw err;
+                }
             }
             case 'updateUser': {
                  // Password update is handled separately if provided
-                if(body.password) {
+                if(body.password && body.password.length > 0) {
                      const hashedPassword = await bcrypt.hash(body.password, 10);
                      await pool.query('UPDATE users SET password = $1 WHERE username = $2', [hashedPassword, body.username]);
                 }

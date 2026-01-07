@@ -1,4 +1,4 @@
-import { Component, inject, signal } from '@angular/core';
+import { Component, inject, signal, effect } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators } from '@angular/forms';
 import { StoreService, User } from '../../services/store.service';
@@ -95,7 +95,7 @@ type Tab = 'general' | 'users' | 'email' | 'config';
                    <p class="text-xs text-gray-500 mt-1">Strength: {{ passwordStrengthLabel() }}</p>
                 </div>
                 <div class="flex gap-2">
-                  <button type="submit" [disabled]="userForm.invalid && !editingUser()" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50">
+                  <button type="submit" [disabled]="userForm.invalid" class="bg-green-600 text-white px-4 py-2 rounded hover:bg-green-700 disabled:opacity-50">
                     {{ editingUser() ? 'Update User' : 'Add User' }}
                   </button>
                   @if(editingUser()) {
@@ -326,6 +326,20 @@ export class SettingsComponent {
     if(smtp) {
         this.smtpForm.patchValue(smtp);
     }
+
+    // Add dynamic validator for password field
+    effect(() => {
+        const isEditing = !!this.editingUser();
+        const passwordControl = this.userForm.get('password');
+        if (isEditing) {
+            // Password is not required when editing a user
+            passwordControl?.clearValidators();
+        } else {
+            // Password is required when creating a new user
+            passwordControl?.setValidators(Validators.required);
+        }
+        passwordControl?.updateValueAndValidity();
+    });
   }
 
   saveGeneral() {
@@ -395,25 +409,33 @@ export class SettingsComponent {
   }
 
   onSubmitUser() {
-    if (this.userForm.valid || (this.editingUser() && this.userForm.get('username')?.valid && this.userForm.get('email')?.valid)) {
-      const val = this.userForm.value;
-      const userData: any = {
-        username: val.username!,
-        email: val.email!,
-        name: val.name || '',
-        surname: val.surname || '',
-        role: val.role as 'admin' | 'user',
-        twoFactorEnabled: this.editingUser()?.twoFactorEnabled || false,
-        twoFactorSecret: this.editingUser()?.twoFactorSecret || undefined
-      };
-      
-      if(val.password) {
-        userData.password = val.password;
-      }
-
-      this.store.addUser(userData); // addUser handles update if username exists
-      this.cancelEditUser();
+    if (this.userForm.invalid) {
+      return;
     }
+    const val = this.userForm.value;
+    const editing = this.editingUser();
+
+    const userData: any = {
+      username: val.username!,
+      email: val.email!,
+      name: val.name || '',
+      surname: val.surname || '',
+      role: val.role as 'admin' | 'user',
+    };
+
+    if (val.password) {
+      userData.password = val.password;
+    }
+
+    if (editing) {
+      // Preserve existing 2FA config when updating from admin panel
+      userData.twoFactorEnabled = editing.twoFactorEnabled || false;
+      userData.twoFactorSecret = editing.twoFactorSecret || undefined;
+      this.store.updateUser(userData);
+    } else {
+      this.store.addUser(userData);
+    }
+    this.cancelEditUser();
   }
 
   // Income Methods
