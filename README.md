@@ -1,4 +1,3 @@
-
 # AdminLTE Finance Portal
 
 A full-stack, single-page application designed for small to medium-sized businesses to track their daily finances. Built with a modern Angular frontend and a robust Node.js backend, it offers a comprehensive suite of tools for managing income, expenses, and account balances, all presented in a clean, professional interface inspired by AdminLTE.
@@ -35,7 +34,7 @@ A full-stack, single-page application designed for small to medium-sized busines
 - **Deployment**:
     - **Nginx**: High-performance reverse proxy for serving the frontend and API.
     - **PM2**: A production process manager for Node.js applications to ensure uptime.
-    - **Bash Script**: An automated `install.sh` script for easy deployment on Linux servers.
+    - **Bash Script**: An automated `install.txt` script for easy deployment on Linux servers.
 
 ## 🚀 Production Deployment (Linux)
 

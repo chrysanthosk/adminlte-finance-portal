@@ -1,4 +1,3 @@
-
 require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
@@ -8,10 +7,29 @@ const { Pool } = require('pg');
 const app = express();
 const port = 3000;
 
+// --- HELPERS to convert snake_case from DB to camelCase for the frontend ---
+const toCamel = (s) => s.replace(/(_\w)/g, (m) => m[1].toUpperCase());
+
+const convertKeysToCamel = (o) => {
+  if (Array.isArray(o)) {
+    return o.map(v => convertKeysToCamel(v));
+  } else if (o !== null && typeof o === 'object' && o.constructor === Object) {
+    const n = {};
+    Object.keys(o).forEach((k) => {
+      n[toCamel(k)] = convertKeysToCamel(o[k]);
+    });
+    return n;
+  }
+  return o;
+};
+
+
 // --- DATABASE CONNECTION ---
 const pool = new Pool({
   user: process.env.DB_USER,
-  host: process.env.DB_HOST,
+  // Force TCP/IP connection by using '127.0.0.1' for 'localhost' to ensure password auth is used,
+  // bypassing potential 'peer' authentication issues that can cause connection failures.
+  host: process.env.DB_HOST === 'localhost' ? '127.0.0.1' : process.env.DB_HOST,
   database: process.env.DB_DATABASE,
   password: process.env.DB_PASSWORD,
   port: process.env.DB_PORT,
@@ -42,7 +60,7 @@ app.post('/api/login', async (req, res) => {
 
     if (passwordMatch) {
       delete user.password; // Never send password hash to client
-      res.json({ success: true, user });
+      res.json({ success: true, user: convertKeysToCamel(user) });
     } else {
       res.json({ success: false, message: 'Invalid credentials' });
     }
@@ -73,10 +91,10 @@ app.get('/api/loadAll', async (req, res) => {
             pool.query('SELECT * FROM account_snapshots ORDER BY month DESC').then(r => r.rows),
         ]);
 
-        res.json({
+        res.json(convertKeysToCamel({
             settings, smtpSettings, users, incomeMethods, expenseTypes,
             expenseCategories, accounts, incomeEntries, expenseEntries, snapshots
-        });
+        }));
     } catch (err) {
         console.error('loadAll error:', err);
         res.status(500).json({ message: 'Failed to load data' });
@@ -123,7 +141,7 @@ app.post('/api/:action', async (req, res) => {
             // --- Income/Expense Config ---
             case 'addIncomeMethod': {
                 const result = await pool.query('INSERT INTO income_methods (name) VALUES ($1) RETURNING *', [body.name]);
-                return res.json(result.rows[0]);
+                return res.json(convertKeysToCamel(result.rows[0]));
             }
             case 'updateIncomeMethod':
                 await pool.query('UPDATE income_methods SET name = $1 WHERE id = $2', [body.name, body.id]);
@@ -133,7 +151,7 @@ app.post('/api/:action', async (req, res) => {
                  break;
             case 'addCategory': {
                 const result = await pool.query('INSERT INTO expense_categories (name) VALUES ($1) RETURNING *', [body.name]);
-                return res.json(result.rows[0]);
+                return res.json(convertKeysToCamel(result.rows[0]));
             }
             case 'updateCategory':
                  await pool.query('UPDATE expense_categories SET name = $1 WHERE id = $2', [body.name, body.id]);
@@ -143,7 +161,7 @@ app.post('/api/:action', async (req, res) => {
                  break;
             case 'addType': {
                 const result = await pool.query('INSERT INTO expense_types (name) VALUES ($1) RETURNING *', [body.name]);
-                return res.json(result.rows[0]);
+                return res.json(convertKeysToCamel(result.rows[0]));
             }
             case 'updateType':
                 await pool.query('UPDATE expense_types SET name = $1 WHERE id = $2', [body.name, body.id]);
@@ -158,7 +176,7 @@ app.post('/api/:action', async (req, res) => {
                     'INSERT INTO income_entries (date, lines, notes, created_by) VALUES ($1, $2, $3, $4) RETURNING *',
                     [body.date, JSON.stringify(body.lines), body.notes, body.createdBy]
                 );
-                return res.json(result.rows[0]);
+                return res.json(convertKeysToCamel(result.rows[0]));
             }
             case 'updateIncome':
                  await pool.query(
@@ -171,7 +189,7 @@ app.post('/api/:action', async (req, res) => {
                     'INSERT INTO expense_entries (date, vendor, amount, payment_type_id, category_id, cheque_no, reason, attachment, created_by) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *',
                     [body.date, body.vendor, body.amount, body.paymentTypeId, body.categoryId, body.chequeNo, body.reason, body.attachment, body.createdBy]
                 );
-                return res.json(result.rows[0]);
+                return res.json(convertKeysToCamel(result.rows[0]));
             }
             case 'updateExpense':
                 await pool.query(
@@ -189,7 +207,7 @@ app.post('/api/:action', async (req, res) => {
                     'INSERT INTO accounts (name, type, currency, active) VALUES ($1, $2, $3, $4) RETURNING *',
                     [body.name, body.type, body.currency, body.active]
                  );
-                 return res.json(result.rows[0]);
+                 return res.json(convertKeysToCamel(result.rows[0]));
             }
             case 'updateAccount':
                  await pool.query(
@@ -202,7 +220,7 @@ app.post('/api/:action', async (req, res) => {
                     'INSERT INTO account_snapshots (month, balances, is_locked) VALUES ($1, $2, $3) ON CONFLICT (month) DO UPDATE SET balances=$2, is_locked=$3 RETURNING *',
                     [body.month, JSON.stringify(body.balances), body.isLocked]
                  );
-                 return res.json(result.rows[0]);
+                 return res.json(convertKeysToCamel(result.rows[0]));
             }
 
             default:

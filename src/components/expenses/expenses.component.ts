@@ -7,6 +7,7 @@ import { AuthService } from '../../services/auth.service';
 
 @Component({
   selector: 'app-expenses',
+  standalone: true,
   imports: [CommonModule, ReactiveFormsModule, CurrencyPipe, FormsModule],
   template: `
     <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">

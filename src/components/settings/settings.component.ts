@@ -7,6 +7,7 @@ type Tab = 'general' | 'users' | 'email' | 'config';
 
 @Component({
   selector: 'app-settings',
+  standalone: true,
   imports: [CommonModule, ReactiveFormsModule],
   template: `
     <div class="card bg-white dark:bg-gray-800 rounded shadow transition-colors">

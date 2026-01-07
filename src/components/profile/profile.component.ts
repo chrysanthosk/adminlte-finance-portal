@@ -6,6 +6,7 @@ import { AuthService } from '../../services/auth.service';
 
 @Component({
   selector: 'app-profile',
+  standalone: true,
   imports: [CommonModule, ReactiveFormsModule, FormsModule],
   template: `
     <div class="max-w-2xl mx-auto">
@@ -145,8 +146,8 @@ export class ProfileComponent {
     });
 
     // Watch for toggle to generate secret if needed
-    this.profileForm.get('twoFactorEnabled')?.valueChanges.subscribe((enabled: boolean) => {
-        if(enabled && !this.twoFactorSecret()) {
+    this.profileForm.get('twoFactorEnabled')?.valueChanges.subscribe((enabled: boolean | null) => {
+        if (enabled && !this.twoFactorSecret()) {
             this.twoFactorSecret.set(this.generateSecret());
         }
     });

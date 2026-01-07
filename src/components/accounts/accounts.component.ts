@@ -6,6 +6,7 @@ import { StoreService, Account } from '../../services/store.service';
 
 @Component({
   selector: 'app-accounts',
+  standalone: true,
   imports: [CommonModule, ReactiveFormsModule, CurrencyPipe],
   template: `
     <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -113,13 +114,17 @@ import { StoreService, Account } from '../../services/store.service';
                     <td class="px-4 py-3">{{ acc.currency }}</td>
                     <td class="px-4 py-3">
                       @if(acc.active) {
-                         <span class="px-2 py-1 text-xs font-semibold leading-tight text-green-700 bg-green-100 dark:bg-green-900 dark:text-green-300 rounded-full">Active</span>
+                         <span class="px-2 py-1 text-xs font-semibold leading-5 text-green-800 bg-green-100 rounded-full dark:bg-green-900 dark:text-green-100">
+                           Active
+                         </span>
                       } @else {
-                         <span class="px-2 py-1 text-xs font-semibold leading-tight text-gray-700 bg-gray-100 dark:bg-gray-600 dark:text-gray-300 rounded-full">Inactive</span>
+                         <span class="px-2 py-1 text-xs font-semibold leading-5 text-red-800 bg-red-100 rounded-full dark:bg-red-900 dark:text-red-100">
+                           Inactive
+                         </span>
                       }
                     </td>
                     <td class="px-4 py-3 text-center">
-                       <button (click)="editAccount(acc)" class="text-indigo-600 dark:text-indigo-400 hover:underline">Edit</button>
+                      <button (click)="editAccount(acc)" class="text-blue-600 dark:text-blue-400 hover:underline">Edit</button>
                     </td>
                   </tr>
                 }
@@ -133,13 +138,12 @@ import { StoreService, Account } from '../../services/store.service';
 })
 export class AccountsComponent {
   store = inject(StoreService);
-  fb: FormBuilder = inject(FormBuilder);
-
-  // Edit State
+  fb = inject(FormBuilder);
+  
   editingAccount = signal<Account | null>(null);
 
   snapshotForm = this.fb.group({
-    month: [new Date().toISOString().slice(0, 7), Validators.required],
+    month: [new Date().toISOString().substring(0, 7)],
     balances: this.fb.array([])
   });
 
@@ -151,29 +155,32 @@ export class AccountsComponent {
   });
 
   constructor() {
-    this.initSnapshotForm();
-  }
-
-  initSnapshotForm() {
-    const arr = this.snapshotForm.get('balances') as FormArray;
-    arr.clear();
-    this.store.accounts().forEach((acc: Account) => {
-      arr.push(this.fb.group({
+    this.store.accounts().forEach(acc => {
+      (this.snapshotForm.get('balances') as FormArray).push(this.fb.group({
         accountId: [acc.id],
-        balance: [0]
+        balance: [0, Validators.required]
       }));
     });
   }
 
-  // Account Management
-  editAccount(acc: Account) {
-    this.editingAccount.set(acc);
-    this.accountForm.patchValue({
-      name: acc.name,
-      type: acc.type,
-      currency: acc.currency,
-      active: acc.active
-    });
+  onSubmitSnapshot() {
+    if(this.snapshotForm.valid) {
+      const formVal = this.snapshotForm.value;
+      this.store.addSnapshot({
+        month: `${formVal.month}-01`,
+        // FIX: Cast form value to the expected type for the store method.
+        // The type of `formVal.balances` is inferred as `unknown[]`, which is not assignable
+        // to the more specific `{ accountId: string; balance: number; }[]` expected by `addSnapshot`.
+        balances: formVal.balances as { accountId: string; balance: number; }[],
+        isLocked: false
+      });
+      alert('Snapshot Saved!');
+    }
+  }
+
+  editAccount(account: Account) {
+    this.editingAccount.set(account);
+    this.accountForm.patchValue(account);
   }
 
   cancelEdit() {
@@ -186,52 +193,27 @@ export class AccountsComponent {
   }
 
   onSubmitAccount() {
-    if (this.accountForm.valid) {
-      const val = this.accountForm.value;
-      const accountData = {
-        name: val.name!,
-        type: val.type!,
-        currency: val.currency!,
-        active: val.active!
-      };
+    if(this.accountForm.valid) {
+      const formVal = this.accountForm.value;
 
-      if (this.editingAccount()) {
-        this.store.updateAccount({
-          ...accountData,
-          id: this.editingAccount()!.id
-        });
-        this.cancelEdit();
+      if(this.editingAccount()) {
+         this.store.updateAccount({
+            ...this.editingAccount()!,
+            name: formVal.name!,
+            type: formVal.type!,
+            currency: formVal.currency!,
+            active: formVal.active!
+         });
+         this.cancelEdit();
       } else {
-        this.store.addAccount(accountData);
-        this.accountForm.reset({
-           type: 'Bank',
-           currency: 'EUR',
-           active: true
-        });
-        // Re-init snapshot form to include new account
-        this.initSnapshotForm();
+         this.store.addAccount({
+            name: formVal.name!,
+            type: formVal.type!,
+            currency: formVal.currency!,
+            active: formVal.active!
+         });
+         this.cancelEdit();
       }
-    }
-  }
-
-  // Snapshot
-  onSubmitSnapshot() {
-    if (this.snapshotForm.valid) {
-      const val = this.snapshotForm.value;
-      const monthDate = val.month + '-01'; 
-      
-      const balances = (val.balances as any[]).map(b => ({
-        accountId: b.accountId,
-        balance: b.balance
-      }));
-
-      this.store.addSnapshot({
-        month: monthDate,
-        balances: balances,
-        isLocked: true
-      });
-      
-      alert('Snapshot saved successfully!');
     }
   }
 }

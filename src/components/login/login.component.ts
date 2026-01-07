@@ -5,6 +5,7 @@ import { CommonModule } from '@angular/common';
 
 @Component({
   selector: 'app-login',
+  standalone: true,
   imports: [ReactiveFormsModule, CommonModule, FormsModule],
   template: `
     <div class="login-page bg-gray-200 dark:bg-gray-900 min-h-screen flex flex-col justify-center items-center font-sans transition-colors duration-300">
