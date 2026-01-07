@@ -1,4 +1,5 @@
 
+
 import { Injectable, signal, computed, inject } from '@angular/core';
 import { HttpClient } from '@angular/common/http';
 import { firstValueFrom } from 'rxjs';
@@ -83,8 +84,8 @@ export class StoreService {
   // Computed Stats
   readonly todayIncome = computed(() => {
     const today = new Date().toISOString().split('T')[0];
-    const entry = this.incomeEntries().find(e => e.date === today);
-    return entry ? entry.lines.reduce((sum, line) => sum + line.amount, 0) : 0;
+    const entry = this.incomeEntries().find((e: IncomeEntry) => e.date === today);
+    return entry ? entry.lines.reduce((sum: number, line: { amount: number }) => sum + line.amount, 0) : 0;
   });
 
   readonly currentMonthStats = computed(() => {
@@ -92,14 +93,14 @@ export class StoreService {
     const currentMonthPrefix = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
     
     let income = 0;
-    this.incomeEntries().forEach(e => {
+    this.incomeEntries().forEach((e: IncomeEntry) => {
       if (e.date.startsWith(currentMonthPrefix)) {
-        income += e.lines.reduce((s, l) => s + l.amount, 0);
+        income += e.lines.reduce((s: number, l: { amount: number }) => s + l.amount, 0);
       }
     });
 
     let expenses = 0;
-    this.expenseEntries().forEach(e => {
+    this.expenseEntries().forEach((e: ExpenseEntry) => {
       if (e.date.startsWith(currentMonthPrefix)) {
         expenses += e.amount;
       }
@@ -144,8 +145,8 @@ export class StoreService {
   // --- Users ---
   async addUser(user: User) {
     await this.post('addUser', user);
-    this.users.update(u => {
-        const idx = u.findIndex(x => x.username === user.username);
+    this.users.update((u: User[]) => {
+        const idx = u.findIndex((x: User) => x.username === user.username);
         if(idx >= 0) {
             const arr = [...u];
             arr[idx] = { ...arr[idx], ...user };
@@ -157,101 +158,101 @@ export class StoreService {
 
   async updateUser(user: User) {
     await this.post('updateUser', user);
-    this.users.update(users => users.map(u => u.username === user.username ? user : u));
+    this.users.update((users: User[]) => users.map((u: User) => u.username === user.username ? user : u));
   }
 
   async removeUser(username: string) {
     await this.post('removeUser', { username });
-    this.users.update(u => u.filter(user => user.username !== username));
+    this.users.update((u: User[]) => u.filter((user: User) => user.username !== username));
   }
 
   // --- Categories/Types ---
   async addIncomeMethod(name: string) {
     const res: any = await this.post('addIncomeMethod', { name });
-    this.incomeMethods.update(c => [...c, res]);
+    this.incomeMethods.update((c: IncomeMethod[]) => [...c, res]);
   }
 
   async updateIncomeMethod(id: string, name: string) {
     await this.post('updateIncomeMethod', { id, name });
-    this.incomeMethods.update(c => c.map(cat => cat.id === id ? { ...cat, name } : cat));
+    this.incomeMethods.update((c: IncomeMethod[]) => c.map((cat: IncomeMethod) => cat.id === id ? { ...cat, name } : cat));
   }
 
   async removeIncomeMethod(id: string) {
     await this.post('removeIncomeMethod', { id });
-    this.incomeMethods.update(c => c.filter(x => x.id !== id));
+    this.incomeMethods.update((c: IncomeMethod[]) => c.filter((x: IncomeMethod) => x.id !== id));
   }
 
   async addExpenseCategory(name: string) {
     const res: any = await this.post('addCategory', { name });
-    this.expenseCategories.update(c => [...c, res]);
+    this.expenseCategories.update((c: ExpenseCategory[]) => [...c, res]);
   }
 
   async updateExpenseCategory(id: string, name: string) {
     await this.post('updateCategory', { id, name });
-    this.expenseCategories.update(c => c.map(cat => cat.id === id ? { ...cat, name } : cat));
+    this.expenseCategories.update((c: ExpenseCategory[]) => c.map((cat: ExpenseCategory) => cat.id === id ? { ...cat, name } : cat));
   }
 
   async removeExpenseCategory(id: string) {
     await this.post('removeCategory', { id });
-    this.expenseCategories.update(c => c.filter(x => x.id !== id));
+    this.expenseCategories.update((c: ExpenseCategory[]) => c.filter((x: ExpenseCategory) => x.id !== id));
   }
 
   async addExpenseType(name: string) {
     const res: any = await this.post('addType', { name });
-    this.expenseTypes.update(t => [...t, res]);
+    this.expenseTypes.update((t: ExpenseType[]) => [...t, res]);
   }
 
   async updateExpenseType(id: string, name: string) {
     await this.post('updateType', { id, name });
-    this.expenseTypes.update(t => t.map(type => type.id === id ? { ...type, name } : type));
+    this.expenseTypes.update((t: ExpenseType[]) => t.map((type: ExpenseType) => type.id === id ? { ...type, name } : type));
   }
 
   async removeExpenseType(id: string) {
     await this.post('removeType', { id });
-    this.expenseTypes.update(t => t.filter(x => x.id !== id));
+    this.expenseTypes.update((t: ExpenseType[]) => t.filter((x: ExpenseType) => x.id !== id));
   }
 
   // --- Income ---
   async addIncome(entry: Omit<IncomeEntry, 'id'>) {
     const res: any = await this.post('addIncome', entry);
-    this.incomeEntries.update(v => [res, ...v]);
+    this.incomeEntries.update((v: IncomeEntry[]) => [res, ...v]);
   }
 
   async updateIncome(entry: IncomeEntry) {
     await this.post('updateIncome', entry);
-    this.incomeEntries.update(v => v.map(e => e.id === entry.id ? entry : e));
+    this.incomeEntries.update((v: IncomeEntry[]) => v.map((e: IncomeEntry) => e.id === entry.id ? entry : e));
   }
 
   // --- Expenses ---
   async addExpense(entry: Omit<ExpenseEntry, 'id'>) {
     const res: any = await this.post('addExpense', entry);
-    this.expenseEntries.update(v => [res, ...v]);
+    this.expenseEntries.update((v: ExpenseEntry[]) => [res, ...v]);
   }
 
   async updateExpense(entry: ExpenseEntry) {
     await this.post('updateExpense', entry);
-    this.expenseEntries.update(v => v.map(e => e.id === entry.id ? entry : e));
+    this.expenseEntries.update((v: ExpenseEntry[]) => v.map((e: ExpenseEntry) => e.id === entry.id ? entry : e));
   }
 
   async removeExpense(id: string) {
     await this.post('removeExpense', { id });
-    this.expenseEntries.update(v => v.filter(e => e.id !== id));
+    this.expenseEntries.update((v: ExpenseEntry[]) => v.filter((e: ExpenseEntry) => e.id !== id));
   }
 
   // --- Accounts ---
   async addSnapshot(snapshot: Omit<AccountSnapshot, 'id'>) {
     const res: any = await this.post('addSnapshot', snapshot);
-    this.snapshots.update(v => [...v.filter(s => s.month !== snapshot.month), res]);
+    this.snapshots.update((v: AccountSnapshot[]) => [...v.filter((s: AccountSnapshot) => s.month !== snapshot.month), res]);
   }
 
   async addAccount(account: Omit<Account, 'id'>) {
     const res: any = await this.post('addAccount', account);
-    this.accounts.update(v => [...v, res]);
+    this.accounts.update((v: Account[]) => [...v, res]);
   }
 
   async updateAccount(account: Account) {
     await this.post('updateAccount', account);
-    this.accounts.update(v => v.map(a => a.id === account.id ? account : a));
+    this.accounts.update((v: Account[]) => v.map((a: Account) => a.id === account.id ? account : a));
   }
 
   private post(action: string, body: any) {

@@ -1,3 +1,4 @@
+
 import { Component, inject, signal, computed, effect, untracked } from '@angular/core';
 import { CommonModule, CurrencyPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, FormArray, Validators, FormsModule, AbstractControl, FormGroup } from '@angular/forms';
@@ -132,8 +133,8 @@ export class IncomeComponent {
   filteredEntries = computed(() => {
     const month = this.filterMonth();
     return this.store.incomeEntries()
-      .filter(e => e.date.startsWith(month))
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .filter((e: IncomeEntry) => e.date.startsWith(month))
+      .sort((a: IncomeEntry, b: IncomeEntry) => new Date(b.date).getTime() - new Date(a.date).getTime());
   });
 
   constructor() {
@@ -168,13 +169,13 @@ export class IncomeComponent {
     });
   }
 
-  getAmountForMethod(entry: any, methodId: string) {
-    const line = entry.lines.find((l: any) => l.methodId === methodId);
+  getAmountForMethod(entry: IncomeEntry, methodId: string) {
+    const line = entry.lines.find((l: { methodId: string }) => l.methodId === methodId);
     return line ? line.amount : 0;
   }
 
-  getTotal(entry: any) {
-    return entry.lines.reduce((s: number, l: any) => s + l.amount, 0);
+  getTotal(entry: IncomeEntry) {
+    return entry.lines.reduce((s: number, l: { amount: number }) => s + l.amount, 0);
   }
 
   edit(entry: IncomeEntry) {
@@ -221,7 +222,7 @@ export class IncomeComponent {
     });
     // Reset amounts to 0
     const amountsArray = this.incomeForm.get('amounts') as FormArray;
-    amountsArray.controls.forEach(c => c.patchValue({ amount: 0 }));
+    amountsArray.controls.forEach((c: AbstractControl) => c.patchValue({ amount: 0 }));
   }
 
   onSubmit() {

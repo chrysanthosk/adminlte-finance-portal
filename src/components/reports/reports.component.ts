@@ -1,6 +1,7 @@
+
 import { Component, inject, ElementRef, ViewChild, AfterViewInit, effect } from '@angular/core';
 import { CommonModule, CurrencyPipe } from '@angular/common';
-import { StoreService } from '../../services/store.service';
+import { StoreService, IncomeEntry, ExpenseEntry } from '../../services/store.service';
 
 declare const d3: any;
 
@@ -74,13 +75,13 @@ export class ReportsComponent implements AfterViewInit {
     return () => {
       const map = new Map<string, { income: number, expenses: number }>();
       
-      this.store.incomeEntries().forEach(e => {
+      this.store.incomeEntries().forEach((e: IncomeEntry) => {
         const m = e.date.substring(0, 7);
         if (!map.has(m)) map.set(m, { income: 0, expenses: 0 });
-        map.get(m)!.income += e.lines.reduce((s, l) => s + l.amount, 0);
+        map.get(m)!.income += e.lines.reduce((s: number, l: { amount: number }) => s + l.amount, 0);
       });
 
-      this.store.expenseEntries().forEach(e => {
+      this.store.expenseEntries().forEach((e: ExpenseEntry) => {
         const m = e.date.substring(0, 7);
         if (!map.has(m)) map.set(m, { income: 0, expenses: 0 });
         map.get(m)!.expenses += e.amount;
@@ -92,14 +93,14 @@ export class ReportsComponent implements AfterViewInit {
     };
   }
 
-  renderPie(expenses: any[]) {
+  renderPie(expenses: ExpenseEntry[]) {
     if (!this.pieContainer || typeof d3 === 'undefined') return;
 
     const el = this.pieContainer.nativeElement;
     d3.select(el).selectAll('*').remove();
 
     const dataMap = new Map<string, number>();
-    expenses.forEach(e => {
+    expenses.forEach((e: ExpenseEntry) => {
       const catName = this.store.expenseCategories().find(c => c.id === e.categoryId)?.name || 'Unknown';
       dataMap.set(catName, (dataMap.get(catName) || 0) + e.amount);
     });

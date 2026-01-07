@@ -1,7 +1,8 @@
+
 import { Component, inject, signal, computed } from '@angular/core';
 import { CommonModule, CurrencyPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators, FormsModule } from '@angular/forms';
-import { StoreService, ExpenseEntry } from '../../services/store.service';
+import { StoreService, ExpenseEntry, ExpenseType } from '../../services/store.service';
 import { AuthService } from '../../services/auth.service';
 
 @Component({
@@ -188,8 +189,8 @@ export class ExpensesComponent {
   filteredEntries = computed(() => {
     const month = this.filterMonth();
     return this.store.expenseEntries()
-      .filter(e => e.date.startsWith(month))
-      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
+      .filter((e: ExpenseEntry) => e.date.startsWith(month))
+      .sort((a: ExpenseEntry, b: ExpenseEntry) => new Date(b.date).getTime() - new Date(a.date).getTime());
   });
 
   getCategoryName(id: string) { return this.store.expenseCategories().find(c => c.id === id)?.name || id; }
@@ -201,7 +202,7 @@ export class ExpensesComponent {
 
   isCheque() {
     const typeId = this.expenseForm.get('paymentTypeId')?.value;
-    const type = this.store.expenseTypes().find(t => t.id === typeId);
+    const type = this.store.expenseTypes().find((t: ExpenseType) => t.id === typeId);
     return type?.name.toLowerCase() === 'cheque';
   }
 

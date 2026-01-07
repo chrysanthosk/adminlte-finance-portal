@@ -1,3 +1,4 @@
+
 import { Component, inject, signal, effect, computed } from '@angular/core';
 import { CommonModule } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, Validators, FormsModule } from '@angular/forms';
@@ -144,7 +145,7 @@ export class ProfileComponent {
     });
 
     // Watch for toggle to generate secret if needed
-    this.profileForm.get('twoFactorEnabled')?.valueChanges.subscribe(enabled => {
+    this.profileForm.get('twoFactorEnabled')?.valueChanges.subscribe((enabled: boolean) => {
         if(enabled && !this.twoFactorSecret()) {
             this.twoFactorSecret.set(this.generateSecret());
         }

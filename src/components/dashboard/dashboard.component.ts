@@ -1,8 +1,15 @@
+
 import { Component, inject, ElementRef, ViewChild, AfterViewInit, effect, computed } from '@angular/core';
 import { CommonModule, CurrencyPipe } from '@angular/common';
-import { StoreService } from '../../services/store.service';
+import { StoreService, IncomeEntry, ExpenseEntry } from '../../services/store.service';
 
 declare const d3: any;
+
+interface ChartData {
+  date: string;
+  inc: number;
+  exp: number;
+}
 
 @Component({
   selector: 'app-dashboard',
@@ -116,14 +123,14 @@ export class DashboardComponent implements AfterViewInit {
   store = inject(StoreService);
   @ViewChild('chartContainer') chartContainer!: ElementRef;
 
-  recentIncome = createComputed(() => this.store.incomeEntries().slice(0, 5));
+  recentIncome = computed(() => this.store.incomeEntries().slice(0, 5));
   
   hasData = computed(() => {
      return this.store.incomeEntries().length > 0 || this.store.expenseEntries().length > 0;
   });
 
-  getIncomeTotal(entry: any) {
-    return entry.lines.reduce((s: number, l: any) => s + l.amount, 0);
+  getIncomeTotal(entry: IncomeEntry) {
+    return entry.lines.reduce((s: number, l: {amount: number}) => s + l.amount, 0);
   }
 
   constructor() {
@@ -143,7 +150,7 @@ export class DashboardComponent implements AfterViewInit {
     }
   }
 
-  renderChart(income: any[], expenses: any[]) {
+  renderChart(income: IncomeEntry[], expenses: ExpenseEntry[]) {
     if (!this.chartContainer || typeof d3 === 'undefined') return;
 
     const el = this.chartContainer.nativeElement;
@@ -173,27 +180,27 @@ export class DashboardComponent implements AfterViewInit {
     }
 
     // Populate actual data
-    income.forEach(e => {
+    income.forEach((e: IncomeEntry) => {
       if (dailyData.has(e.date)) {
-        dailyData.get(e.date)!.inc += e.lines.reduce((s:number, l:any) => s + l.amount, 0);
+        dailyData.get(e.date)!.inc += e.lines.reduce((s: number, l: { amount: number }) => s + l.amount, 0);
       }
     });
 
-    expenses.forEach(e => {
+    expenses.forEach((e: ExpenseEntry) => {
       if (dailyData.has(e.date)) {
         dailyData.get(e.date)!.exp += e.amount;
       }
     });
 
-    const data = Array.from(dailyData.entries()).map(([date, val]) => ({ date, ...val }));
+    const data: ChartData[] = Array.from(dailyData.entries()).map(([date, val]) => ({ date, ...val }));
 
     const x = d3.scaleBand()
       .range([0, width])
       .padding(0.1)
-      .domain(data.map(d => d.date.substring(5))); // Format to MM-DD for axis
+      .domain(data.map((d: ChartData) => d.date.substring(5))); // Format to MM-DD for axis
 
     // Calculate max with padding
-    const maxVal = d3.max(data, (d: any) => Math.max(d.inc, d.exp)) || 100;
+    const maxVal = d3.max(data, (d: ChartData) => Math.max(d.inc, d.exp)) || 100;
     const y = d3.scaleLinear()
       .range([height, 0])
       .domain([0, maxVal * 1.1]);
@@ -204,7 +211,7 @@ export class DashboardComponent implements AfterViewInit {
 
     // X Axis
     const xAxis = d3.axisBottom(x)
-      .tickValues(x.domain().filter((d:any, i:number) => i % 5 === 0)); // Reduce ticks
+      .tickValues(x.domain().filter((d: string, i: number) => i % 5 === 0)); // Reduce ticks
 
     const gx = svg.append('g')
       .attr('transform', `translate(0,${height})`)
@@ -228,10 +235,10 @@ export class DashboardComponent implements AfterViewInit {
       .data(data)
       .enter().append('rect')
       .attr('class', 'bar-inc')
-      .attr('x', (d: any) => x(d.date.substring(5)))
+      .attr('x', (d: ChartData) => x(d.date.substring(5)))
       .attr('width', x.bandwidth() / 2)
-      .attr('y', (d: any) => y(d.inc))
-      .attr('height', (d: any) => height - y(d.inc))
+      .attr('y', (d: ChartData) => y(d.inc))
+      .attr('height', (d: ChartData) => height - y(d.inc))
       .attr('fill', '#22c55e');
 
     // Bars - Expense
@@ -239,14 +246,10 @@ export class DashboardComponent implements AfterViewInit {
       .data(data)
       .enter().append('rect')
       .attr('class', 'bar-exp')
-      .attr('x', (d: any) => x(d.date.substring(5))! + x.bandwidth() / 2)
+      .attr('x', (d: ChartData) => x(d.date.substring(5))! + x.bandwidth() / 2)
       .attr('width', x.bandwidth() / 2)
-      .attr('y', (d: any) => y(d.exp))
-      .attr('height', (d: any) => height - y(d.exp))
+      .attr('y', (d: ChartData) => y(d.exp))
+      .attr('height', (d: ChartData) => height - y(d.exp))
       .attr('fill', '#ef4444');
   }
-}
-
-function createComputed(fn: () => any) {
-  return computed(fn);
 }

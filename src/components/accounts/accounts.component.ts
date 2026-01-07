@@ -1,3 +1,4 @@
+
 import { Component, inject, signal } from '@angular/core';
 import { CommonModule, CurrencyPipe } from '@angular/common';
 import { FormBuilder, ReactiveFormsModule, FormArray, Validators } from '@angular/forms';
@@ -156,7 +157,7 @@ export class AccountsComponent {
   initSnapshotForm() {
     const arr = this.snapshotForm.get('balances') as FormArray;
     arr.clear();
-    this.store.accounts().forEach(acc => {
+    this.store.accounts().forEach((acc: Account) => {
       arr.push(this.fb.group({
         accountId: [acc.id],
         balance: [0]

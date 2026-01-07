@@ -107,13 +107,13 @@ if [ -z "$DB_PASS" ]; then
     print_error "Password cannot be empty."
 fi
 
-sudo -u postgres psql -c "CREATE DATABASE $DB_NAME;" &>/dev/null || print_info "Database '$DB_NAME' already exists."
-sudo -u postgres psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" &>/dev/null || print_info "User '$DB_USER' already exists. Setting password."
-sudo -u postgres psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
-sudo -u postgres psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
+sudo -u postgres -i psql -c "CREATE DATABASE $DB_NAME;" &>/dev/null || print_info "Database '$DB_NAME' already exists."
+sudo -u postgres -i psql -c "CREATE USER $DB_USER WITH PASSWORD '$DB_PASS';" &>/dev/null || print_info "User '$DB_USER' already exists. Setting password."
+sudo -u postgres -i psql -c "ALTER USER $DB_USER WITH PASSWORD '$DB_PASS';"
+sudo -u postgres -i psql -c "GRANT ALL PRIVILEGES ON DATABASE $DB_NAME TO $DB_USER;"
 
 print_info "Populating database schema from db_setup.txt..."
-sudo -u postgres psql -d $DB_NAME < "$APP_DIR/db_setup.txt"
+cat "$APP_DIR/db_setup.txt" | sudo -u postgres -i psql -d $DB_NAME
 print_success "Database setup is complete."
 
 # 4. Backend Configuration
