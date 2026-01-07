@@ -6,35 +6,45 @@
     "app": {
       "projectType": "application",
       "root": "",
-      "sourceRoot": "./",
+      "sourceRoot": "src",
       "prefix": "app",
       "architect": {
         "build": {
           "builder": "@angular/build:application",
           "options": {
             "outputPath": {
-              "base": "./dist",
+              "base": "dist",
               "browser": "."
             },
-            "browser": "index.tsx",
-            "tsConfig": "tsconfig.json"
+            "index": "index.html",
+            "browser": "src/main.ts",
+            "tsConfig": "tsconfig.app.json",
+            "assets": [],
+            "styles": [
+              "src/styles.css"
+            ],
+            "scripts": []
           },
           "configurations": {
             "production": {
-              "outputHashing": "all"
+              "optimization": true,
+              "sourceMap": false,
+              "extractLicenses": true
             },
             "development": {
               "optimization": false,
-              "extractLicenses": false,
-              "sourceMap": true
+              "sourceMap": true,
+              "extractLicenses": false
             }
           },
-          "defaultConfiguration": "production"
+          "defaultConfiguration": "development"
         },
         "serve": {
           "builder": "@angular/build:dev-server",
           "options": {
-            "port": 3000
+            "buildTarget": "app:build:development",
+            "port": 8080,
+            "proxyConfig": "proxy.conf.json"
           },
           "configurations": {
             "production": {
