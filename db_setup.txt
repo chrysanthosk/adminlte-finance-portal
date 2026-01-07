@@ -42,29 +42,33 @@ CREATE TABLE IF NOT EXISTS users (
 -- Income Methods (e.g., Cash, Credit Card, Bank Transfer)
 CREATE TABLE IF NOT EXISTS income_methods (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(100) NOT NULL UNIQUE
+    name VARCHAR(100) NOT NULL
 );
+
 
 -- Expense Categories (e.g., Office Supplies, Utilities, Travel)
 CREATE TABLE IF NOT EXISTS expense_categories (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(100) NOT NULL UNIQUE
+    name VARCHAR(100) NOT NULL
 );
+
 
 -- Expense Payment Types (e.g., Company Card, Cheque, Petty Cash)
 CREATE TABLE IF NOT EXISTS expense_types (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(100) NOT NULL UNIQUE
+    name VARCHAR(100) NOT NULL
 );
+
 
 -- Financial Accounts (e.g., Main Bank Account, Savings, Wallet)
 CREATE TABLE IF NOT EXISTS accounts (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    name VARCHAR(100) NOT NULL UNIQUE,
+    name VARCHAR(100) NOT NULL,
     type VARCHAR(50) NOT NULL,
     currency VARCHAR(10) NOT NULL DEFAULT 'EUR',
     active BOOLEAN DEFAULT true
 );
+
 
 -- Daily Income Entries
 CREATE TABLE IF NOT EXISTS income_entries (
@@ -94,11 +98,41 @@ CREATE TABLE IF NOT EXISTS expense_entries (
 -- Monthly Account Balance Snapshots
 CREATE TABLE IF NOT EXISTS account_snapshots (
     id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-    month DATE NOT NULL UNIQUE, -- Store as the first day of the month
+    month DATE NOT NULL,
     balances JSONB NOT NULL, -- [{"accountId": "...", "balance": 5000.00}]
     is_locked BOOLEAN DEFAULT false,
     created_at TIMESTAMPTZ DEFAULT NOW()
 );
+
+
+-- =============================================
+--      DATA MIGRATION & HEALING
+-- =============================================
+-- De-duplicate config data from older schema versions that lacked unique constraints.
+-- This allows the UNIQUE INDEX to be created successfully.
+-- It keeps the first-inserted row (by internal ctid) and deletes subsequent duplicates.
+DELETE FROM accounts a WHERE a.ctid <> (SELECT min(b.ctid) FROM accounts b WHERE a.name = b.name);
+DELETE FROM income_methods a WHERE a.ctid <> (SELECT min(b.ctid) FROM income_methods b WHERE a.name = b.name);
+DELETE FROM expense_categories a WHERE a.ctid <> (SELECT min(b.ctid) FROM expense_categories b WHERE a.name = b.name);
+DELETE FROM expense_types a WHERE a.ctid <> (SELECT min(b.ctid) FROM expense_types b WHERE a.name = b.name);
+
+
+-- =============================================
+--       CONSTRAINTS & INDEXES
+-- =============================================
+
+-- Add unique constraints to config tables for data integrity and for "ON CONFLICT" to work reliably.
+CREATE UNIQUE INDEX IF NOT EXISTS income_methods_name_idx ON income_methods (name);
+CREATE UNIQUE INDEX IF NOT EXISTS expense_categories_name_idx ON expense_categories (name);
+CREATE UNIQUE INDEX IF NOT EXISTS expense_types_name_idx ON expense_types (name);
+CREATE UNIQUE INDEX IF NOT EXISTS accounts_name_idx ON accounts (name);
+
+-- Unique constraint for snapshots (one per month)
+CREATE UNIQUE INDEX IF NOT EXISTS account_snapshots_month_idx ON account_snapshots (month);
+
+-- Performance indexes for date-based filtering
+CREATE INDEX IF NOT EXISTS idx_income_entries_date ON income_entries(date);
+CREATE INDEX IF NOT EXISTS idx_expense_entries_date ON expense_entries(date);
 
 
 -- =============================================
@@ -119,20 +153,13 @@ WHERE NOT EXISTS (SELECT 1 FROM smtp_settings);
 -- Password is 'admin'
 INSERT INTO users (username, password, email, name, surname, role)
 SELECT 'admin', '$2a$10$8.O33Y1p5/s/z9icp.t/peaS0h1.y1g/5zJ6Y.1.f3zJg0b.1v2L6', 'admin@example.com', 'Admin', 'User', 'admin'
-WHERE NOT EXISTS (SELECT 1 FROM users WHERE username = 'admin');
+ON CONFLICT (username) DO NOTHING;
 
 -- Insert default transaction configurations
 INSERT INTO income_methods (name) VALUES ('Cash'), ('Bank Transfer'), ('Credit Card') ON CONFLICT (name) DO NOTHING;
 INSERT INTO expense_categories (name) VALUES ('Office Supplies'), ('Utilities'), ('Marketing'), ('Salaries'), ('Travel') ON CONFLICT (name) DO NOTHING;
 INSERT INTO expense_types (name) VALUES ('Company Card'), ('Petty Cash'), ('Cheque'), ('Bank Wire') ON CONFLICT (name) DO NOTHING;
 INSERT INTO accounts (name, type, currency, active) VALUES ('Main Bank Account', 'Bank', 'EUR', true), ('Petty Cash Wallet', 'Cash', 'EUR', true) ON CONFLICT (name) DO NOTHING;
-
-
--- =============================================
---                  INDEXES
--- =============================================
-CREATE INDEX IF NOT EXISTS idx_income_entries_date ON income_entries(date);
-CREATE INDEX IF NOT EXISTS idx_expense_entries_date ON expense_entries(date);
 
 
 -- --- END OF SCRIPT ---

@@ -1,6 +1,7 @@
 
+
 import { bootstrapApplication } from '@angular/platform-browser';
-import { APP_INITIALIZER, NgZone, EventEmitter } from '@angular/core';
+import { APP_INITIALIZER, NgZone, EventEmitter, enableProdMode } from '@angular/core';
 import { provideRouter, withHashLocation } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
 import { AppComponent } from './src/app.component';
@@ -43,6 +44,8 @@ class NoopNgZone implements NgZone {
 export function initializeApp(store: StoreService) {
   return () => store.loadAll();
 }
+
+enableProdMode();
 
 bootstrapApplication(AppComponent, {
   providers: [

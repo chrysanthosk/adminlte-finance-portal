@@ -108,6 +108,28 @@ app.post('/api/:action', async (req, res) => {
 
     try {
         switch (action) {
+            case 'updateSettings': {
+                // Assuming only one row exists in app_settings
+                await pool.query('UPDATE app_settings SET company_name = $1', [body.companyName]);
+                break;
+            }
+            case 'updateSmtp': {
+                // This query safely updates the single SMTP settings row.
+                // It correctly quotes the "user" column and prevents an empty password from being saved.
+                const query = `
+                    WITH old AS (SELECT password FROM smtp_settings LIMIT 1)
+                    UPDATE smtp_settings SET
+                        host = $1,
+                        port = $2,
+                        "user" = $3,
+                        password = COALESCE(NULLIF($4, ''), (SELECT password FROM old)),
+                        secure = $5,
+                        from_name = $6,
+                        from_email = $7
+                `;
+                await pool.query(query, [body.host, body.port, body.user, body.password, body.secure, body.fromName, body.fromEmail]);
+                break;
+            }
             case 'addUser': {
                 const { username, password, email, name, surname, role } = body;
                 if (!password) {

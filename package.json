@@ -6,7 +6,7 @@
     "install-backend": "cd api && npm install",
     "start-backend": "cd api && node index.js",
     "dev": "concurrently \"npm run start-backend\" \"echo 'Run the frontend in your development environment'\"",
-    "build": "ngc --project tsconfig.app.json && rollup -c"
+    "build": "ngc --project tsconfig.app.json && rollup -c && tailwindcss -i src/styles.css -o dist/styles.css"
   },
   "author": "",
   "license": "ISC",
@@ -21,11 +21,13 @@
     "@angular/router": "^18.0.3",
     "@rollup/plugin-commonjs": "^26.0.1",
     "@rollup/plugin-node-resolve": "^15.2.3",
-    "@rollup/plugin-typescript": "^11.1.6",
+    "autoprefixer": "^10.4.19",
     "concurrently": "^8.2.2",
+    "postcss": "^8.4.38",
     "rollup": "^4.20.2",
     "rollup-plugin-copy": "^3.5.0",
     "rxjs": "^7.8.1",
+    "tailwindcss": "^3.4.4",
     "tslib": "^2.6.3",
     "typescript": "^5.4.5"
   }

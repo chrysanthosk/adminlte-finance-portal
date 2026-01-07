@@ -5,23 +5,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>AdminLTE Finance Portal</title>
-  <script src="https://cdn.tailwindcss.com"></script>
-  <script>
-    tailwind.config = {
-      darkMode: 'class',
-      theme: {
-        extend: {
-          colors: {
-            dark: {
-              bg: '#343a40',
-              card: '#454d55',
-              text: '#e2e8f0'
-            }
-          }
-        }
-      }
-    }
-  </script>
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg">
+  <link rel="stylesheet" href="styles.css">
   <script src="https://d3js.org/d3.v7.min.js"></script>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -64,10 +49,10 @@
     }
     
     /* Fix for Date/Month Picker Icons */
-    input[type="date"], input[type="month"] {
+    input[type]="date"], input[type]="month"] {
       color-scheme: light;
     }
-    .dark input[type="date"], .dark input[type="month"] {
+    .dark input[type]="date"], .dark input[type]="month"] {
       color-scheme: dark;
     }
   </style>
@@ -86,11 +71,7 @@
     "@angular/common": "https://esm.sh/@angular/common@^18.0.3?external=rxjs",
     "@angular/router": "https://esm.sh/@angular/router@^18.0.3?external=rxjs",
     "@angular/forms": "https://esm.sh/@angular/forms@^18.0.3?external=rxjs",
-    "@angular/common/http": "https://esm.sh/@angular/common@^18.0.3/http?external=rxjs",
-    "@rollup/plugin-node-resolve": "https://esm.sh/@rollup/plugin-node-resolve@^15.2.3?external=rxjs",
-    "rollup-plugin-copy": "https://esm.sh/rollup-plugin-copy@^3.5.0?external=rxjs",
-    "@rollup/plugin-typescript": "https://esm.sh/@rollup/plugin-typescript@^11.1.6?external=rxjs",
-    "@rollup/plugin-commonjs": "https://esm.sh/@rollup/plugin-commonjs@^26.0.1?external=rxjs"
+    "@angular/common/http": "https://esm.sh/@angular/common@^18.0.3/http?external=rxjs"
   }
 }
 </script>
@@ -98,5 +79,6 @@
 </head>
 <body class="antialiased text-sm transition-colors duration-200 dark:bg-gray-800 dark:text-gray-200">
   <app-root></app-root>
+  <script type="module" src="index.js"></script>
 </body>
 </html>
