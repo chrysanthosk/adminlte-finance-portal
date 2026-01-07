@@ -1,5 +1,5 @@
 
-import { Injectable, signal, inject } from '@angular/core';
+import { Injectable, signal, inject, computed } from '@angular/core';
 import { Router } from '@angular/router';
 import { HttpClient } from '@angular/common/http';
 import { StoreService, User } from './store.service';
@@ -10,8 +10,11 @@ export class AuthService {
   private store = inject(StoreService);
   private router = inject(Router) as Router;
   private http: HttpClient = inject(HttpClient);
-  
+
   currentUser = signal<User | null>(null);
+
+  isAuthenticated = computed(() => this.currentUser() !== null);
+  isAdmin = computed(() => this.currentUser()?.role === 'admin');
 
   // Checks credentials via API
   async validateCredentials(username: string, password: string): Promise<User | null> {
@@ -42,13 +45,5 @@ export class AuthService {
   logout() {
     this.currentUser.set(null);
     this.router.navigate(['/login']);
-  }
-
-  isAuthenticated() {
-    return this.currentUser() !== null;
-  }
-
-  isAdmin() {
-    return this.currentUser()?.role === 'admin';
   }
 }

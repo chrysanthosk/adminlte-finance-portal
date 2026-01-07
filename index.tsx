@@ -1,56 +1,25 @@
 
-
+import '@angular/compiler';
 import { bootstrapApplication } from '@angular/platform-browser';
-import { APP_INITIALIZER, NgZone, EventEmitter, enableProdMode } from '@angular/core';
+import { APP_INITIALIZER, provideZoneChangeDetection } from '@angular/core';
 import { provideRouter, withHashLocation } from '@angular/router';
 import { provideHttpClient } from '@angular/common/http';
+
 import { AppComponent } from './src/app.component';
 import { routes } from './src/app.routes';
 import { StoreService } from './src/services/store.service';
 
-/**
- * A null `NgZone` implementation that does nothing, effectively making the application "zoneless".
- * This is used as a fallback when `provideZonelessChangeDetection` is not available or not working
- * in the build environment.
- */
-class NoopNgZone implements NgZone {
-  readonly hasPendingMicrotasks = false;
-  readonly hasPendingMacrotasks = false;
-  readonly isStable = true;
-  readonly onUnstable = new EventEmitter<false>();
-  readonly onMicrotaskEmpty = new EventEmitter<true>();
-  readonly onStable = new EventEmitter<true>();
-  readonly onError = new EventEmitter<any>();
-
-  run<T>(fn: (...args: any[]) => T, applyThis?: any, applyArgs?: any[]): T {
-    return fn.apply(applyThis, applyArgs ?? []);
-  }
-
-  runGuarded<T>(fn: (...args: any[]) => T, applyThis?: any, applyArgs?: any[]): T {
-    return fn.apply(applyThis, applyArgs ?? []);
-  }
-
-  runTask<T>(fn: (...args: any[]) => T, applyThis?: any, applyArgs?: any[], source?: string): T {
-    return fn.apply(applyThis, applyArgs ?? []);
-  }
-
-  runOutsideAngular<T>(fn: (...args: any[]) => T): T {
-    return fn();
-  }
-}
-
 // Factory for APP_INITIALIZER
-// This function will be executed when the app is initialized.
 export function initializeApp(store: StoreService) {
   return () => store.loadAll();
 }
 
-enableProdMode();
-
 bootstrapApplication(AppComponent, {
   providers: [
-    // Manually provide a 'noop' zone to run the application without Zone.js.
-    { provide: NgZone, useClass: NoopNgZone },
+    // FIX: The `provideZonelessChangeDetection` export is not available from the CDN.
+    // Reverting to the more established `provideZoneChangeDetection({ ngZone: 'noop' })`
+    // to enable zoneless change detection.
+    provideZoneChangeDetection({ ngZone: 'noop' }),
     provideRouter(routes, withHashLocation()),
     provideHttpClient(),
     {
@@ -58,7 +27,7 @@ bootstrapApplication(AppComponent, {
       useFactory: initializeApp,
       deps: [StoreService],
       multi: true,
-    },
+    }
   ]
 }).catch((err: any) => console.error(err));
 
