@@ -1,590 +1,547 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# ============================================================
-# AdminLTE Finance Portal - Systemd Installer (PostgreSQL + Nginx)
-# - Builds Angular frontend and serves via Nginx
-# - Runs API (Node/Express) via systemd
-# - Creates dedicated Linux user + project directory
-# - Creates Postgres DB + user
-# - Optional HTTPS: existing cert OR Let's Encrypt (certbot)
-# - Adds daily pg_dump cron + retention
-# ============================================================
-
-# -------------------------
-# Helpers / safety
-# -------------------------
 log() { echo -e "\n\033[1;32m[INFO]\033[0m $*"; }
-warn() { echo -e "\n\033[1;33m[WARN]\033[0m $*"; }
-err() { echo -e "\n\033[1;31m[ERR ]\033[0m $*" >&2; }
+warn(){ echo -e "\n\033[1;33m[WARN]\033[0m $*"; }
+err() { echo -e "\n\033[1;31m[ERR ]\033[0m $*"; }
 die() { err "$*"; exit 1; }
 
-# Print the line that failed (so we never “exit silently” again)
-trap 'err "Installer failed at line ${LINENO}. Command: ${BASH_COMMAND}"; exit 1' ERR
+require_root(){ [[ "${EUID:-$(id -u)}" -eq 0 ]] || die "Run as root: sudo $0"; }
 
-need_root() {
-  if [[ "${EUID}" -ne 0 ]]; then
-    die "Please run as root: sudo $0"
-  fi
+prompt() { # var, msg, default
+  local var="$1" msg="$2" def="${3:-}" val=""
+  if [[ -n "$def" ]]; then read -r -p "$msg [$def]: " val; val="${val:-$def}"
+  else read -r -p "$msg: " val; fi
+  printf -v "$var" "%s" "$val"
 }
 
-command_exists() { command -v "$1" >/dev/null 2>&1; }
+prompt_secret() { # var, msg
+  local var="$1" msg="$2" val=""
+  read -r -s -p "$msg: " val; echo
+  printf -v "$var" "%s" "$val"
+}
 
-# Always read from the controlling terminal to avoid sudo/stdin issues
-TTY_IN="/dev/tty"
-if [[ ! -r "$TTY_IN" ]]; then
-  die "No TTY available for interactive prompts. Run this script in an interactive terminal."
-fi
+yesno(){ # msg, default(y/n)
+  local msg="$1" def="${2:-y}" ans=""
+  local s="[y/N]"; [[ "$def" == "y" ]] && s="[Y/n]"
+  read -r -p "$msg $s: " ans
+  ans="${ans,,}"
+  [[ -z "$ans" ]] && { [[ "$def" == "y" ]] && return 0 || return 1; }
+  [[ "$ans" == "y" || "$ans" == "yes" ]]
+}
 
-prompt() {
-  # prompt "Question" "default"
-  local q="$1"
-  local def="${2:-}"
-  local ans=""
-
-  if [[ -n "$def" ]]; then
-    printf "%s [%s]: " "$q" "$def" >"$TTY_IN"
+detect_os(){
+  [[ -f /etc/os-release ]] || die "Missing /etc/os-release"
+  # shellcheck disable=SC1091
+  source /etc/os-release
+  OS_ID="${ID:-unknown}"
+  OS_LIKE="${ID_LIKE:-}"
+  if [[ "$OS_ID" =~ (ubuntu|debian) ]] || [[ "$OS_LIKE" =~ (debian) ]]; then
+    OS_FAMILY="debian"
+  elif [[ "$OS_ID" =~ (rocky|almalinux|rhel|centos|fedora) ]] || [[ "$OS_LIKE" =~ (rhel|fedora|centos) ]]; then
+    OS_FAMILY="rhel"
   else
-    printf "%s: " "$q" >"$TTY_IN"
-  fi
-
-  IFS= read -r ans <"$TTY_IN" || die "Failed to read input from TTY."
-  if [[ -z "${ans}" && -n "$def" ]]; then
-    echo "$def"
-  else
-    echo "$ans"
+    die "Unsupported OS: $OS_ID ($OS_LIKE)"
   fi
 }
 
-prompt_secret() {
-  local q="$1"
-  local ans=""
-  printf "%s: " "$q" >"$TTY_IN"
-  stty -echo <"$TTY_IN"
-  IFS= read -r ans <"$TTY_IN" || { stty echo <"$TTY_IN"; die "Failed to read secret from TTY."; }
-  stty echo <"$TTY_IN"
-  printf "\n" >"$TTY_IN"
-  echo "$ans"
-}
-
-prompt_yesno() {
-  # prompt_yesno "Enable HTTPS?" "y"
-  local q="$1"
-  local def="${2:-y}"   # y or n
-  local ans=""
-  while true; do
-    printf "%s [%s/%s]: " "$q" "$def" "$( [[ "$def" == "y" ]] && echo "n" || echo "y" )" >"$TTY_IN"
-    IFS= read -r ans <"$TTY_IN" || die "Failed to read y/n from TTY."
-    ans="${ans:-$def}"
-    case "$ans" in
-      y|Y) return 0 ;;
-      n|N) return 1 ;;
-      *) printf "Please answer y or n.\n" >"$TTY_IN" ;;
-    esac
-  done
-}
-
-sanitize_slug() {
-  local s="$1"
-  if [[ ! "$s" =~ ^[a-z0-9-]{3,32}$ ]]; then
-    die "PROJECT_SLUG must match ^[a-z0-9-]{3,32}$ (example: finance-portal)"
-  fi
-}
-
-os_family() {
-  if [[ -f /etc/os-release ]]; then
-    # shellcheck disable=SC1091
-    . /etc/os-release
-    case "${ID:-unknown}" in
-      ubuntu|debian) echo "debian" ;;
-      rhel|centos|rocky|almalinux|fedora) echo "rhel" ;;
-      *) echo "unknown" ;;
-    esac
-  else
-    echo "unknown"
-  fi
-}
-
-install_packages_debian() {
+install_packages_debian(){
   log "Installing packages (Debian/Ubuntu)..."
   apt-get update -y
-  apt-get install -y ca-certificates curl gnupg git rsync nginx postgresql postgresql-contrib
+  apt-get install -y ca-certificates curl git unzip zip gnupg lsb-release software-properties-common
 
-  if ! command_exists node || [[ "$(node -v | sed 's/v//;s/\..*//')" -lt 20 ]]; then
-    log "Installing Node.js 20 (NodeSource)..."
-    curl -fsSL https://deb.nodesource.com/setup_20.x | bash -
-    apt-get install -y nodejs
+  apt-get install -y nginx mysql-server
+
+  if [[ "$OS_ID" == "ubuntu" ]]; then
+    add-apt-repository -y ppa:ondrej/php
+    apt-get update -y
   fi
+
+  apt-get install -y \
+    php8.2 php8.2-fpm php8.2-cli php8.2-mbstring php8.2-xml php8.2-curl php8.2-zip php8.2-mysql \
+    php8.2-bcmath php8.2-intl php8.2-gd
+
+  log "Installing Node.js (LTS)..."
+  curl -fsSL https://deb.nodesource.com/setup_lts.x | bash -
+  apt-get install -y nodejs
+
+  apt-get install -y certbot python3-certbot-nginx
 }
 
-install_packages_rhel() {
-  log "Installing packages (RHEL/Fedora/Rocky/Alma)..."
-  if command_exists dnf; then
-    dnf -y install ca-certificates curl git rsync nginx postgresql-server postgresql-contrib
-  else
-    yum -y install ca-certificates curl git rsync nginx postgresql-server postgresql-contrib
-  fi
+install_packages_rhel(){
+  log "Installing packages (RHEL/Rocky/Alma)..."
+  dnf -y install ca-certificates curl git unzip zip tar
 
-  # Init DB if first time
-  if [[ ! -f /var/lib/pgsql/data/PG_VERSION && ! -f /var/lib/pgsql/*/data/PG_VERSION ]]; then
-    log "Initializing PostgreSQL..."
-    if command_exists postgresql-setup; then
-      postgresql-setup --initdb
-    elif [[ -x /usr/bin/postgresql-setup ]]; then
-      /usr/bin/postgresql-setup --initdb
-    else
-      warn "postgresql-setup not found. You may need to initdb manually."
-    fi
-  fi
+  dnf -y install epel-release || true
+  dnf -y install nginx
 
-  if ! command_exists node || [[ "$(node -v | sed 's/v//;s/\..*//')" -lt 20 ]]; then
-    log "Installing Node.js 20 (NodeSource RPM)..."
-    curl -fsSL https://rpm.nodesource.com/setup_20.x | bash -
-    if command_exists dnf; then
-      dnf -y install nodejs
-    else
-      yum -y install nodejs
-    fi
-  fi
+  log "Installing MariaDB (MySQL-compatible)..."
+  dnf -y install mariadb-server mariadb
+
+  log "Installing PHP 8.2 via Remi..."
+  dnf -y install https://rpms.remirepo.net/enterprise/remi-release-9.rpm || true
+  dnf -y module reset php || true
+  dnf -y module enable php:remi-8.2 || true
+  dnf -y install php php-fpm php-cli php-mbstring php-xml php-curl php-zip php-mysqlnd php-bcmath php-intl php-gd
+
+  log "Installing Node.js (LTS)..."
+  curl -fsSL https://rpm.nodesource.com/setup_lts.x | bash -
+  dnf -y install nodejs
+
+  dnf -y install certbot python3-certbot-nginx || warn "Certbot install failed; install manually if needed."
 }
 
-ensure_services() {
-  log "Enabling and starting Nginx..."
+install_composer(){
+  if command -v composer >/dev/null 2>&1; then
+    log "Composer already installed."
+    return
+  fi
+  log "Installing Composer..."
+  curl -fsSL https://getcomposer.org/installer -o /tmp/composer-setup.php
+  php /tmp/composer-setup.php --install-dir=/usr/local/bin --filename=composer
+  rm -f /tmp/composer-setup.php
+}
+
+enable_services(){
+  log "Enabling services..."
   systemctl enable --now nginx
-
-  log "Enabling and starting PostgreSQL..."
-  systemctl enable --now postgresql || systemctl enable --now postgresql.service || true
-  systemctl start postgresql || true
-}
-
-create_linux_user() {
-  local user="$1"
-  if id "$user" >/dev/null 2>&1; then
-    log "Linux user '$user' already exists."
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    systemctl enable --now mysql
+    systemctl enable --now php8.2-fpm
+    PHP_FPM_SERVICE="php8.2-fpm"
+    DB_SERVICE="mysql"
+    PHP_FPM_UPSTREAM="unix:/run/php/php8.2-fpm.sock"
   else
-    log "Creating Linux user '$user'..."
-    useradd --system --create-home --shell /usr/sbin/nologin "$user"
+    systemctl enable --now mariadb
+    systemctl enable --now php-fpm
+    PHP_FPM_SERVICE="php-fpm"
+    DB_SERVICE="mariadb"
+    PHP_FPM_UPSTREAM="127.0.0.1:9000"
+    # ensure php-fpm listens on 127.0.0.1:9000
+    if [[ -f /etc/php-fpm.d/www.conf ]]; then
+      sed -i 's|^listen = .*|listen = 127.0.0.1:9000|g' /etc/php-fpm.d/www.conf || true
+      systemctl restart php-fpm
+    fi
   fi
 }
 
-random_secret() {
-  # Avoid SIGPIPE issues with `set -o pipefail`.
-  # Prefer openssl; fallback to python; final fallback uses urandom safely.
-  if command -v openssl >/dev/null 2>&1; then
-    openssl rand -hex 32
-    return 0
+create_app_user_and_dirs(){
+  log "Creating Linux user and directories..."
+  if ! id "$APP_USER" >/dev/null 2>&1; then
+    useradd --system --create-home --shell /bin/bash "$APP_USER"
   fi
-
-  if command -v python3 >/dev/null 2>&1; then
-    python3 - <<'PY'
-import secrets
-print(secrets.token_hex(32))
-PY
-    return 0
-  fi
-
-  # Last resort: generate from urandom without pipefail-triggering pipelines
-  # 64 bytes -> base64 -> strip non-alnum -> take 48 chars
-  local out=""
-  out="$(dd if=/dev/urandom bs=64 count=1 2>/dev/null | base64 | tr -dc 'A-Za-z0-9' | head -c 48 || true)"
-  if [[ -z "$out" ]]; then
-    die "Could not generate random secret (missing openssl/python3 and fallback failed)."
-  fi
-  echo "$out"
+  mkdir -p "$APP_DIR" "$BACKUP_DIR"
+  chown -R "$APP_USER":"$APP_USER" "$APP_DIR" "$BACKUP_DIR"
 }
 
-pg_exec() {
-  sudo -u postgres psql -v ON_ERROR_STOP=1 -c "$1" >/dev/null
+clone_or_update_repo(){
+  log "Deploying repo to $APP_DIR..."
+  if [[ -d "$APP_DIR/.git" ]]; then
+    sudo -u "$APP_USER" git -C "$APP_DIR" fetch --all
+    sudo -u "$APP_USER" git -C "$APP_DIR" checkout "$GIT_BRANCH"
+    sudo -u "$APP_USER" git -C "$APP_DIR" pull
+  else
+    sudo -u "$APP_USER" git clone --branch "$GIT_BRANCH" "$GIT_REPO" "$APP_DIR"
+  fi
 }
 
-create_postgres_db_and_user() {
-  local db="$1"
-  local u="$2"
-  local p="$3"
+configure_local_db(){
+  if [[ "$DB_HOST" != "127.0.0.1" && "$DB_HOST" != "localhost" ]]; then
+    warn "Remote DB detected; skipping DB/user creation. Ensure DB and user exist."
+    return
+  fi
 
-  [[ "$db" =~ ^[a-zA-Z0-9_]{1,32}$ ]] || die "DB name must be letters/numbers/_ only"
-  [[ "$u"  =~ ^[a-zA-Z0-9_]{1,32}$ ]] || die "DB user must be letters/numbers/_ only"
-
-  log "Creating Postgres role/user + database (idempotent)..."
-  pg_exec "DO \$\$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = '${u}') THEN
-    CREATE ROLE ${u} LOGIN PASSWORD '${p}';
-  END IF;
-END
-\$\$;"
-
-  pg_exec "DO \$\$
-BEGIN
-  IF NOT EXISTS (SELECT 1 FROM pg_database WHERE datname = '${db}') THEN
-    CREATE DATABASE ${db} OWNER ${u};
-  END IF;
-END
-\$\$;"
-
-  pg_exec "ALTER DATABASE ${db} OWNER TO ${u};"
+  log "Creating database + user locally..."
+  # Works on MySQL (Ubuntu/Debian default root via socket) and MariaDB similarly
+  mysql -u root -e "CREATE DATABASE IF NOT EXISTS \`${DB_NAME}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci;"
+  mysql -u root -e "CREATE USER IF NOT EXISTS '${DB_USER}'@'%' IDENTIFIED BY '${DB_PASS}';"
+  mysql -u root -e "GRANT ALL PRIVILEGES ON \`${DB_NAME}\`.* TO '${DB_USER}'@'%'; FLUSH PRIVILEGES;"
 }
 
-write_api_env() {
-  local env_dir="$1"
-  local env_file="$2"
-  local frontend_origin="$3"
-  local port="$4"
-  local pg_db="$5"
-  local pg_user="$6"
-  local pg_pass="$7"
-  local jwt_secret="$8"
+setup_env(){
+  log "Configuring .env..."
+  if [[ ! -f "$APP_DIR/.env" ]]; then
+    [[ -f "$APP_DIR/.env.example" ]] || die "No .env or .env.example in repo."
+    sudo -u "$APP_USER" cp "$APP_DIR/.env.example" "$APP_DIR/.env"
+  fi
 
-  mkdir -p "$env_dir"
-  chmod 750 "$env_dir"
+  sudo -u "$APP_USER" sed -i "s/^APP_NAME=.*/APP_NAME=\"${APP_NAME}\"/g" "$APP_DIR/.env" || true
+  sudo -u "$APP_USER" sed -i "s|^APP_URL=.*|APP_URL=${APP_URL}|g" "$APP_DIR/.env" || true
+  sudo -u "$APP_USER" sed -i "s/^DB_CONNECTION=.*/DB_CONNECTION=mysql/g" "$APP_DIR/.env" || true
+  sudo -u "$APP_USER" sed -i "s/^DB_HOST=.*/DB_HOST=${DB_HOST}/g" "$APP_DIR/.env" || true
+  sudo -u "$APP_USER" sed -i "s/^DB_PORT=.*/DB_PORT=${DB_PORT}/g" "$APP_DIR/.env" || true
+  sudo -u "$APP_USER" sed -i "s/^DB_DATABASE=.*/DB_DATABASE=${DB_NAME}/g" "$APP_DIR/.env" || true
+  sudo -u "$APP_USER" sed -i "s/^DB_USERNAME=.*/DB_USERNAME=${DB_USER}/g" "$APP_DIR/.env" || true
 
-  cat >"$env_file" <<EOF
-# Generated by install.sh
-PORT=${port}
-FRONTEND_ORIGIN=${frontend_origin}
+  local esc_db_pass
+  esc_db_pass="$(printf '%s' "$DB_PASS" | sed 's/[&/\]/\\&/g')"
+  sudo -u "$APP_USER" sed -i "s/^DB_PASSWORD=.*/DB_PASSWORD=${esc_db_pass}/g" "$APP_DIR/.env" || true
 
-JWT_SECRET=${jwt_secret}
+  mkdir -p "$APP_DIR/storage" "$APP_DIR/bootstrap/cache"
+  chown -R "$APP_USER":"$APP_USER" "$APP_DIR/storage" "$APP_DIR/bootstrap/cache"
+  chmod -R ug+rwX "$APP_DIR/storage" "$APP_DIR/bootstrap/cache"
+}
 
-PGHOST=127.0.0.1
-PGPORT=5432
-PGDATABASE=${pg_db}
-PGUSER=${pg_user}
-PGPASSWORD=${pg_pass}
+install_app_deps(){
+  log "Installing Composer deps..."
+  sudo -u "$APP_USER" composer -d "$APP_DIR" install --no-interaction --prefer-dist --optimize-autoloader
+
+  if [[ -f "$APP_DIR/package.json" ]]; then
+    log "Building frontend assets..."
+    sudo -u "$APP_USER" bash -lc "cd '$APP_DIR' && npm install && npm run build"
+  else
+    warn "No package.json found; skipping npm build."
+  fi
+}
+
+run_artisan(){
+  log "Running artisan tasks..."
+  sudo -u "$APP_USER" bash -lc "cd '$APP_DIR' && php artisan key:generate --force"
+  sudo -u "$APP_USER" bash -lc "cd '$APP_DIR' && php artisan migrate --force"
+  if [[ "$RUN_SEED" == "yes" ]]; then
+    sudo -u "$APP_USER" bash -lc "cd '$APP_DIR' && php artisan db:seed --force" || warn "Seeding failed (no seeders yet?)."
+  fi
+  sudo -u "$APP_USER" bash -lc "cd '$APP_DIR' && php artisan config:cache && php artisan route:cache && php artisan view:cache" || true
+}
+
+nginx_site_path(){
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    echo "/etc/nginx/sites-available/${PROJECT_SLUG}.conf"
+  else
+    echo "/etc/nginx/conf.d/${PROJECT_SLUG}.conf"
+  fi
+}
+
+write_nginx_http(){
+  local site_conf="$1"
+  cat > "$site_conf" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+
+    root ${APP_DIR}/public;
+    index index.php index.html;
+
+    client_max_body_size 25M;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param PATH_INFO \$fastcgi_path_info;
+        fastcgi_pass ${PHP_FPM_UPSTREAM};
+        fastcgi_index index.php;
+    }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}
 EOF
-
-  chmod 640 "$env_file"
 }
 
-deploy_project_files() {
-  local src_dir="$1"
-  local dest_dir="$2"
-  local owner="$3"
-
-  log "Deploying project to ${dest_dir} ..."
-  mkdir -p "$dest_dir"
-
-  rsync -a --delete \
-    --exclude ".git" \
-    --exclude "node_modules" \
-    --exclude "api/node_modules" \
-    --exclude "dist" \
-    --exclude "__MACOSX" \
-    --exclude ".DS_Store" \
-    --exclude ".env" \
-    --exclude "api/.env" \
-    "$src_dir"/ "$dest_dir"/
-
-  chown -R "$owner":"$owner" "$dest_dir"
+write_nginx_ssl_existing(){
+  local site_conf="$1"
+  cat > "$site_conf" <<EOF
+server {
+    listen 80;
+    listen [::]:80;
+    server_name ${DOMAIN};
+    return 301 https://\$host\$request_uri;
 }
 
-build_frontend_and_api() {
-  local dest_dir="$1"
-  local owner="$2"
+server {
+    listen 443 ssl http2;
+    listen [::]:443 ssl http2;
+    server_name ${DOMAIN};
 
-  log "Installing root npm deps and building frontend..."
-  sudo -u "$owner" bash -lc "cd '$dest_dir' && npm install"
-  sudo -u "$owner" bash -lc "cd '$dest_dir' && npm run build"
+    ssl_certificate     ${CERT_FULLCHAIN};
+    ssl_certificate_key ${CERT_PRIVKEY};
 
-  log "Installing API deps..."
-  sudo -u "$owner" bash -lc "cd '$dest_dir/api' && npm install"
+    root ${APP_DIR}/public;
+    index index.php index.html;
+
+    client_max_body_size 25M;
+
+    add_header X-Frame-Options "SAMEORIGIN" always;
+    add_header X-Content-Type-Options "nosniff" always;
+
+    location / {
+        try_files \$uri \$uri/ /index.php?\$query_string;
+    }
+
+    location ~ \.php\$ {
+        include fastcgi_params;
+        fastcgi_param SCRIPT_FILENAME \$document_root\$fastcgi_script_name;
+        fastcgi_param PATH_INFO \$fastcgi_path_info;
+        fastcgi_pass ${PHP_FPM_UPSTREAM};
+        fastcgi_index index.php;
+    }
+
+    location ~ /\.(?!well-known).* {
+        deny all;
+    }
+}
+EOF
 }
 
-apply_schema() {
-  local dest_dir="$1"
-  local db="$2"
-  local schema_file="$dest_dir/db_setup.txt"
+configure_nginx(){
+  local site_conf
+  site_conf="$(nginx_site_path)"
+  log "Configuring Nginx: $site_conf"
 
-  if [[ -f "$schema_file" ]]; then
-    log "Applying schema from db_setup.txt..."
-    sudo -u postgres psql -v ON_ERROR_STOP=1 -d "$db" -f "$schema_file" >/dev/null
-  else
-    warn "db_setup.txt not found. Skipping schema import."
+  # Default to HTTP; HTTPS step will upgrade if chosen
+  write_nginx_http "$site_conf"
+
+  if [[ "$OS_FAMILY" == "debian" ]]; then
+    ln -sf "$site_conf" "/etc/nginx/sites-enabled/${PROJECT_SLUG}.conf"
+    rm -f /etc/nginx/sites-enabled/default || true
   fi
+
+  nginx -t
+  systemctl reload nginx
 }
 
-write_systemd_service_api() {
-  local slug="$1"
-  local user="$2"
-  local workdir="$3"
-  local env_file="$4"
+enable_https(){
+  if [[ "$ENABLE_HTTPS" != "yes" ]]; then
+    warn "HTTPS not enabled."
+    return
+  fi
 
-  local svc="/etc/systemd/system/${slug}-api.service"
+  if [[ "$DOMAIN" == "_" || "$DOMAIN" == "localhost" || "$DOMAIN" == "127.0.0.1" ]]; then
+    warn "No real domain set; skipping HTTPS automation."
+    return
+  fi
 
-  cat >"$svc" <<EOF
+  local site_conf
+  site_conf="$(nginx_site_path)"
+
+  if [[ "$SSL_MODE" == "existing" ]]; then
+    [[ -f "$CERT_FULLCHAIN" ]] || die "Cert fullchain not found: $CERT_FULLCHAIN"
+    [[ -f "$CERT_PRIVKEY" ]]   || die "Cert privkey not found: $CERT_PRIVKEY"
+    log "Enabling HTTPS using existing certificates..."
+    write_nginx_ssl_existing "$site_conf"
+    if [[ "$OS_FAMILY" == "debian" ]]; then
+      ln -sf "$site_conf" "/etc/nginx/sites-enabled/${PROJECT_SLUG}.conf"
+      rm -f /etc/nginx/sites-enabled/default || true
+    fi
+    nginx -t
+    systemctl reload nginx
+    return
+  fi
+
+  log "Enabling HTTPS using Let's Encrypt (certbot)..."
+  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$LE_EMAIL" --redirect || die "Certbot failed."
+}
+
+setup_systemd_queue(){
+  if [[ "$SETUP_QUEUE" != "yes" ]]; then
+    warn "Skipping queue worker service."
+    return
+  fi
+
+  log "Creating queue worker service..."
+  local svc="/etc/systemd/system/${PROJECT_SLUG}-queue.service"
+  cat > "$svc" <<EOF
 [Unit]
-Description=${slug} API (Node/Express)
-After=network.target postgresql.service
-Wants=postgresql.service
+Description=${PROJECT_SLUG} Laravel Queue Worker
+After=network.target
 
 [Service]
 Type=simple
-User=${user}
-WorkingDirectory=${workdir}/api
-EnvironmentFile=${env_file}
-ExecStart=/usr/bin/node ${workdir}/api/index.js
-Restart=on-failure
-RestartSec=2
-NoNewPrivileges=true
-PrivateTmp=true
-ProtectSystem=full
-ProtectHome=true
-ReadWritePaths=${workdir}
+User=${APP_USER}
+Group=${APP_USER}
+WorkingDirectory=${APP_DIR}
+ExecStart=/usr/bin/php ${APP_DIR}/artisan queue:work --sleep=3 --tries=3 --timeout=120
+Restart=always
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target
 EOF
 
   systemctl daemon-reload
-  systemctl enable --now "${slug}-api.service"
+  systemctl enable --now "${PROJECT_SLUG}-queue.service"
 }
 
-install_certbot_if_needed() {
-  if command_exists certbot; then return 0; fi
-
-  log "Installing certbot..."
-  local fam
-  fam="$(os_family)"
-  if [[ "$fam" == "debian" ]]; then
-    apt-get update -y
-    apt-get install -y certbot python3-certbot-nginx
-  else
-    if command_exists dnf; then
-      dnf -y install epel-release || true
-      dnf -y install certbot python3-certbot-nginx || dnf -y install certbot
-    else
-      yum -y install epel-release || true
-      yum -y install certbot python3-certbot-nginx || yum -y install certbot
-    fi
-  fi
-}
-
-write_nginx_conf_http() {
-  local slug="$1"
-  local domain="$2"
-  local app_dir="$3"
-  local api_port="$4"
-
-  local fam
-  fam="$(os_family)"
-  local conf
-  if [[ "$fam" == "debian" ]]; then
-    conf="/etc/nginx/sites-available/${slug}.conf"
-  else
-    conf="/etc/nginx/conf.d/${slug}.conf"
+setup_scheduler_cron(){
+  if [[ "$SETUP_SCHEDULER" != "yes" ]]; then
+    warn "Skipping scheduler cron."
+    return
   fi
 
-  cat >"$conf" <<EOF
-server {
-  listen 80;
-  server_name ${domain};
-
-  root ${app_dir}/dist;
-  index index.html;
-
-  location / {
-    try_files \$uri \$uri/ /index.html;
-  }
-
-  location /api/ {
-    proxy_pass http://127.0.0.1:${api_port}/api/;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
+  log "Adding scheduler cron..."
+  cat > "/etc/cron.d/${PROJECT_SLUG}-scheduler" <<EOF
+* * * * * ${APP_USER} cd ${APP_DIR} && /usr/bin/php artisan schedule:run >> /var/log/${PROJECT_SLUG}-scheduler.log 2>&1
+EOF
 }
+
+setup_backups(){
+  log "Setting up daily mysqldump backups..."
+
+  local backup_script="/usr/local/bin/${PROJECT_SLUG}-backup.sh"
+  cat > "$backup_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+TS=\$(date +%F_%H%M%S)
+OUT="${BACKUP_DIR}/${DB_NAME}_\${TS}.sql.gz"
+
+mysqldump -h "${DB_HOST}" -P "${DB_PORT}" -u "${DB_USER}" -p"${DB_PASS}" "${DB_NAME}" | gzip > "\$OUT"
+find "${BACKUP_DIR}" -type f -name "*.sql.gz" -mtime +${BACKUP_RETENTION_DAYS} -delete
+EOF
+  chmod 700 "$backup_script"
+  chown "$APP_USER":"$APP_USER" "$backup_script" || true
+
+  cat > "/etc/cron.d/${PROJECT_SLUG}-backup" <<EOF
+0 2 * * * ${APP_USER} ${backup_script} >> /var/log/${PROJECT_SLUG}-backup.log 2>&1
+EOF
+}
+
+summary(){
+  cat <<EOF
+
+========================================
+✅ INSTALL COMPLETE
+========================================
+Project slug:   ${PROJECT_SLUG}
+App dir:        ${APP_DIR}
+Linux user:     ${APP_USER}
+Domain:         ${DOMAIN}
+App URL:        ${APP_URL}
+
+DB:             ${DB_HOST}:${DB_PORT}/${DB_NAME}
+DB user:        ${DB_USER}
+
+Nginx conf:     $(nginx_site_path)
+Backups:        ${BACKUP_DIR} (02:00 daily, retention ${BACKUP_RETENTION_DAYS} days)
+Logs:           /var/log/${PROJECT_SLUG}-backup.log, /var/log/${PROJECT_SLUG}-scheduler.log
+
+Services:
+- nginx:        systemctl status nginx
+- php-fpm:      systemctl status ${PHP_FPM_SERVICE}
+- db:           systemctl status ${DB_SERVICE}
 EOF
 
-  if [[ "$fam" == "debian" ]]; then
-    ln -sf "$conf" "/etc/nginx/sites-enabled/${slug}.conf"
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
+  if [[ "$SETUP_QUEUE" == "yes" ]]; then
+    echo "- queue:        systemctl status ${PROJECT_SLUG}-queue.service"
+  fi
+  if [[ "$SETUP_SCHEDULER" == "yes" ]]; then
+    echo "- scheduler:    /etc/cron.d/${PROJECT_SLUG}-scheduler"
   fi
 
-  nginx -t
-  systemctl reload nginx
-}
+  cat <<EOF
 
-write_nginx_conf_https_manual() {
-  local slug="$1"
-  local domain="$2"
-  local app_dir="$3"
-  local api_port="$4"
-  local cert="$5"
-  local key="$6"
+How to test (quick):
+1) Check Nginx:
+   curl -I ${APP_URL}
+2) Check app routes:
+   curl -I ${APP_URL}/login
+3) Check PHP-FPM:
+   sudo tail -n 100 /var/log/nginx/error.log
+4) Check Laravel health:
+   sudo -u ${APP_USER} bash -lc "cd ${APP_DIR} && php artisan about"
 
-  local fam
-  fam="$(os_family)"
-  local conf
-  if [[ "$fam" == "debian" ]]; then
-    conf="/etc/nginx/sites-available/${slug}.conf"
-  else
-    conf="/etc/nginx/conf.d/${slug}.conf"
-  fi
-
-  cat >"$conf" <<EOF
-server {
-  listen 80;
-  server_name ${domain};
-  return 301 https://\$host\$request_uri;
-}
-
-server {
-  listen 443 ssl http2;
-  server_name ${domain};
-
-  ssl_certificate     ${cert};
-  ssl_certificate_key ${key};
-
-  root ${app_dir}/dist;
-  index index.html;
-
-  location / {
-    try_files \$uri \$uri/ /index.html;
-  }
-
-  location /api/ {
-    proxy_pass http://127.0.0.1:${api_port}/api/;
-    proxy_http_version 1.1;
-    proxy_set_header Host \$host;
-    proxy_set_header X-Real-IP \$remote_addr;
-    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-    proxy_set_header X-Forwarded-Proto \$scheme;
-  }
-}
 EOF
-
-  if [[ "$fam" == "debian" ]]; then
-    ln -sf "$conf" "/etc/nginx/sites-enabled/${slug}.conf"
-    rm -f /etc/nginx/sites-enabled/default 2>/dev/null || true
-  fi
-
-  nginx -t
-  systemctl reload nginx
 }
 
-setup_pg_dump_cron() {
-  local slug="$1"
-  local db="$2"
-  local user="$3"
-  local pass="$4"
-  local retention="$5"
+# -------- main --------
+require_root
+detect_os
+log "Laravel All-in-One installer"
 
-  local backup_dir="/var/backups/${slug}/postgres"
-  mkdir -p "$backup_dir"
-  chmod 750 "$backup_dir"
+prompt PROJECT_SLUG "PROJECT_SLUG (folder/user/service name)" "laravelapp"
+prompt GIT_REPO "GitHub repo URL (https or ssh)" ""
+[[ -n "$GIT_REPO" ]] || die "GIT_REPO required"
+prompt GIT_BRANCH "Git branch" "main"
 
-  local cron="/etc/cron.d/${slug}-pgdump"
-  cat >"$cron" <<EOF
-SHELL=/bin/bash
-PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+prompt DOMAIN "Domain (e.g. portal.example.com). Use _ for none yet" "_"
+prompt APP_NAME "APP_NAME" "Laravel Portal"
 
-# Daily at 02:10
-10 2 * * * root export PGPASSWORD='${pass}' && \
-  pg_dump -h 127.0.0.1 -U '${user}' -d '${db}' -F c -f '${backup_dir}/${db}-\$(date +\%F).dump' && \
-  find '${backup_dir}' -type f -name '${db}-*.dump' -mtime +${retention} -delete
-EOF
-  chmod 644 "$cron"
-}
-
-# -------------------------
-# Main
-# -------------------------
-need_root
-
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-[[ -f "${SCRIPT_DIR}/package.json" ]] || die "Run this script from repo root (package.json not found)."
-
-log "AdminLTE Finance Portal installer (systemd) starting..."
-
-PROJECT_SLUG="$(prompt "Enter PROJECT_SLUG (used for paths/services/user)" "finance-portal")"
-PROJECT_SLUG="$(echo "$PROJECT_SLUG" | tr '[:upper:]' '[:lower:]')"
-sanitize_slug "$PROJECT_SLUG"
-
-APP_USER="${PROJECT_SLUG}"
-APP_DIR="/var/www/${PROJECT_SLUG}"
-ENV_DIR="/etc/${PROJECT_SLUG}"
-API_ENV="${ENV_DIR}/api.env"
-
-DOMAIN="$(prompt "Enter domain (or server IP) to use in Nginx server_name" "$(hostname -f 2>/dev/null || echo "localhost")")"
-API_PORT="$(prompt "Enter API port (local only)" "3000")"
-
-DB_NAME="$(prompt "Postgres database name" "$(echo "${PROJECT_SLUG}" | tr '-' '_')")"
-DB_USER="$(prompt "Postgres app username" "$(echo "${PROJECT_SLUG}" | tr '-' '_')")"
-DB_PASS="$(prompt_secret "Postgres app user password (leave empty to auto-generate)")"
-if [[ -z "$DB_PASS" ]]; then
-  DB_PASS="$(random_secret)"
-  log "Generated DB password."
+# URL: if domain is _, use http://127.0.0.1
+if [[ "$DOMAIN" == "_" ]]; then
+  APP_URL="http://127.0.0.1"
+else
+  APP_URL="http://${DOMAIN}"
 fi
 
-JWT_SECRET="$(random_secret)"
+prompt DB_HOST "DB host" "127.0.0.1"
+prompt DB_PORT "DB port" "3306"
+prompt DB_NAME "DB name" "${PROJECT_SLUG}"
+prompt DB_USER "DB user" "${PROJECT_SLUG}_user"
+prompt_secret DB_PASS "DB password for ${DB_USER}"
 
-USE_HTTPS="no"
-CERT_MODE="none"
-CERT_PATH=""
-KEY_PATH=""
+# SSL selection
+ENABLE_HTTPS="no"
+SSL_MODE="none"
+CERT_FULLCHAIN=""
+CERT_PRIVKEY=""
 LE_EMAIL=""
 
-if prompt_yesno "Enable HTTPS?" "y"; then
-  USE_HTTPS="yes"
-  if prompt_yesno "Do you already have certificate/key files?" "n"; then
-    CERT_MODE="existing"
-    CERT_PATH="$(prompt "Full path to certificate (fullchain.pem)" "")"
-    KEY_PATH="$(prompt "Full path to private key (privkey.pem)" "")"
-    [[ -f "$CERT_PATH" ]] || die "Certificate not found: $CERT_PATH"
-    [[ -f "$KEY_PATH" ]] || die "Key not found: $KEY_PATH"
+if yesno "Enable HTTPS?" "y"; then
+  ENABLE_HTTPS="yes"
+  if yesno "Use your own certificate files (fullchain + privkey)?" "y"; then
+    SSL_MODE="existing"
+    prompt CERT_FULLCHAIN "Path to fullchain.pem" "/etc/ssl/certs/fullchain.pem"
+    prompt CERT_PRIVKEY   "Path to privkey.pem" "/etc/ssl/private/privkey.pem"
   else
-    CERT_MODE="letsencrypt"
-    LE_EMAIL="$(prompt "Email for Let's Encrypt registration" "admin@${DOMAIN}")"
+    SSL_MODE="letsencrypt"
+    prompt LE_EMAIL "Email for Let's Encrypt" "admin@${DOMAIN//_/example.com}"
   fi
 fi
 
-RETENTION_DAYS="$(prompt "pg_dump retention days" "14")"
-[[ "$RETENTION_DAYS" =~ ^[0-9]+$ ]] || die "Retention must be a number."
+SETUP_QUEUE="no"
+SETUP_SCHEDULER="yes"
+RUN_SEED="yes"
 
-FAM="$(os_family)"
-case "$FAM" in
-  debian) install_packages_debian ;;
-  rhel) install_packages_rhel ;;
-  *) die "Unsupported OS family." ;;
-esac
+if yesno "Setup queue worker (systemd)?" "n"; then SETUP_QUEUE="yes"; fi
+if yesno "Add scheduler cron (every minute)?" "y"; then SETUP_SCHEDULER="yes"; else SETUP_SCHEDULER="no"; fi
+if yesno "Run seeders after migrate?" "y"; then RUN_SEED="yes"; else RUN_SEED="no"; fi
 
-ensure_services
-create_linux_user "$APP_USER"
-deploy_project_files "$SCRIPT_DIR" "$APP_DIR" "$APP_USER"
-build_frontend_and_api "$APP_DIR" "$APP_USER"
+prompt BACKUP_RETENTION_DAYS "Backup retention days" "14"
 
-create_postgres_db_and_user "$DB_NAME" "$DB_USER" "$DB_PASS"
-apply_schema "$APP_DIR" "$DB_NAME"
+APP_USER="${PROJECT_SLUG}"
+APP_DIR="/opt/${PROJECT_SLUG}"
+BACKUP_DIR="/var/backups/${PROJECT_SLUG}/mysql"
 
-FRONTEND_ORIGIN="http://${DOMAIN}"
-if [[ "$USE_HTTPS" == "yes" ]]; then FRONTEND_ORIGIN="https://${DOMAIN}"; fi
-
-write_api_env "$ENV_DIR" "$API_ENV" "$FRONTEND_ORIGIN" "$API_PORT" "$DB_NAME" "$DB_USER" "$DB_PASS" "$JWT_SECRET"
-
-write_systemd_service_api "$PROJECT_SLUG" "$APP_USER" "$APP_DIR" "$API_ENV"
-
-# Nginx config (HTTP first; needed for certbot challenge)
-write_nginx_conf_http "$PROJECT_SLUG" "$DOMAIN" "$APP_DIR" "$API_PORT"
-
-if [[ "$USE_HTTPS" == "yes" && "$CERT_MODE" == "existing" ]]; then
-  write_nginx_conf_https_manual "$PROJECT_SLUG" "$DOMAIN" "$APP_DIR" "$API_PORT" "$CERT_PATH" "$KEY_PATH"
-elif [[ "$USE_HTTPS" == "yes" && "$CERT_MODE" == "letsencrypt" ]]; then
-  install_certbot_if_needed
-  log "Running certbot for ${DOMAIN}..."
-  certbot --nginx -d "$DOMAIN" --non-interactive --agree-tos -m "$LE_EMAIL" --redirect
-  # certbot writes its own config; keep ours consistent by re-writing with expected LE paths:
-  CERT_PATH="/etc/letsencrypt/live/${DOMAIN}/fullchain.pem"
-  KEY_PATH="/etc/letsencrypt/live/${DOMAIN}/privkey.pem"
-  write_nginx_conf_https_manual "$PROJECT_SLUG" "$DOMAIN" "$APP_DIR" "$API_PORT" "$CERT_PATH" "$KEY_PATH"
+if [[ "$OS_FAMILY" == "debian" ]]; then
+  install_packages_debian
+else
+  install_packages_rhel
 fi
 
-setup_pg_dump_cron "$PROJECT_SLUG" "$DB_NAME" "$DB_USER" "$DB_PASS" "$RETENTION_DAYS"
+install_composer
+enable_services
 
-log "✅ Installation complete!"
-echo "App dir:       $APP_DIR"
-echo "API env:       $API_ENV"
-echo "Service:       systemctl status ${PROJECT_SLUG}-api --no-pager"
-echo "Logs:          journalctl -u ${PROJECT_SLUG}-api -f"
-echo "Backups:       /var/backups/${PROJECT_SLUG}/postgres (daily @ 02:10; keep ${RETENTION_DAYS} days)"
-echo "URL:           ${FRONTEND_ORIGIN}"
+create_app_user_and_dirs
+clone_or_update_repo
+configure_local_db
+setup_env
+install_app_deps
+run_artisan
+
+configure_nginx
+
+# update URL if https chosen
+if [[ "$ENABLE_HTTPS" == "yes" && "$DOMAIN" != "_" ]]; then
+  APP_URL="https://${DOMAIN}"
+  sudo -u "$APP_USER" sed -i "s|^APP_URL=.*|APP_URL=${APP_URL}|g" "$APP_DIR/.env" || true
+fi
+
+enable_https
+
+setup_systemd_queue
+setup_scheduler_cron
+setup_backups
+
+systemctl restart nginx
+systemctl restart "$PHP_FPM_SERVICE"
+systemctl restart "$DB_SERVICE" || true
+
+summary

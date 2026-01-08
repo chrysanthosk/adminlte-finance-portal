@@ -3,4 +3,4 @@ __MACOSX/
 node_modules/
 dist/
 .env
-api/.env
+old/api/.env
